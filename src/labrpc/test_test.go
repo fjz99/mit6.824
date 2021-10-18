@@ -66,6 +66,40 @@ func (js *JunkServer) Handler7(args int, reply *string) {
 	}
 }
 
+type MyServer struct {
+	id int
+}
+
+func (s *MyServer) Fuck(args string, reply *string) {
+	*reply = "fuck! " + args
+}
+
+// 坑，struct和方法必须是大写，这样才能调用。。
+//返回参数都是指针
+func TestMyRPC(t *testing.T) {
+	runtime.GOMAXPROCS(4) //GO最大CPU数目
+
+	rn := MakeNetwork()
+	defer rn.Cleanup()
+
+	e := rn.MakeEnd("testEnd")
+
+	js := &MyServer{} //RPC方法具体修改这个结构体
+	svc := MakeService(js)
+
+	rs := MakeServer()
+	rs.AddService(svc)
+	rn.AddServer("server!", rs)
+
+	rn.Connect("testEnd", "server!")
+	rn.Enable("testEnd", true)
+
+	rt := ""
+	e.Call("MyServer.Fuck", "abc", &rt)
+	fmt.Printf("%s\n", rt)
+
+}
+
 func TestBasic(t *testing.T) {
 	runtime.GOMAXPROCS(4)
 
