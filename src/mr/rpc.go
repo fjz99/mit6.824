@@ -22,8 +22,19 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+type Task struct {
+	id            string
+	_type         uint8  //0 map ,1 reduce
+	inputLocation string //location
+}
 
+type Output struct {
+	task           *Task
+	status         uint8 //0 ok,1 failed,2 rename failed
+	outputLocation string
+}
+
+// Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
