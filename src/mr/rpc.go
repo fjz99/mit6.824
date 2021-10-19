@@ -6,32 +6,40 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"log"
+	"os"
+)
 import "strconv"
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
+const debug = false
 
-type ExampleArgs struct {
-	X int
+type Empty struct {
+	Worker string
 }
 
-type ExampleReply struct {
-	Y int
+func Debug(format string, a ...interface{}) {
+	if debug {
+		log.Printf(format, a...)
+	}
 }
 
 type Task struct {
-	id            string
-	_type         uint8  //0 map ,1 reduce
-	inputLocation string //location
+	TaskId        int      //TaskId
+	Type          uint8    //0 map ,1 reduce
+	InputLocation []string //location
+	NReduce       int      //为了hash取模
 }
 
 type Output struct {
-	task           *Task
-	status         uint8 //0 ok,1 failed,2 rename failed
-	outputLocation string
+	Task           *Task
+	Status         uint8    //0 ok,1 failed,2 rename failed
+	OutputLocation []string //map操作的输出文件位置，数组长度为nReduce；reduce操作的输出为mr-out-x
+}
+
+type FinishWorkReq struct {
+	Output   *Output
+	WorkerId string
 }
 
 // Add your RPC definitions here.

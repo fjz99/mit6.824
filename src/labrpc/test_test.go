@@ -1,6 +1,9 @@
 package labrpc
 
-import "testing"
+import (
+	"hash/fnv"
+	"testing"
+)
 import "strconv"
 import "sync"
 import "runtime"
@@ -98,6 +101,104 @@ func TestMyRPC(t *testing.T) {
 	e.Call("MyServer.Fuck", "abc", &rt)
 	fmt.Printf("%s\n", rt)
 
+}
+
+type Task struct {
+	Id            int
+	Type          uint8
+	InputLocation []string
+	NReduce       int
+}
+
+type Output struct {
+	Task           *Task
+	Status         uint8
+	OutputLocation []string
+	P              []int
+}
+
+func (s *MyServer) FuckArray(args *Task, output *Output) {
+	fmt.Printf("%#v\n", args)
+	*output = Output{nil, 0, []string{"abc", "def"}, []int{1, 2, 3}}
+	fmt.Printf("%#v\n", output)
+}
+
+func (s *MyServer) FuckArray2(args *Task, string2 *[]string) {
+	*string2 = []string{"1", "333"}
+}
+
+func (s *MyServer) FuckAskForWork(worker string, task *Task) {
+	p := s.id
+	s.id++
+	fmt.Println(p)
+	t := Task{p, 0, []string{"abc"}, 1}
+	fmt.Printf("%s rt %#v\t*******", worker, t)
+	*task = t
+}
+
+func TestStrange(t *testing.T) {
+	runtime.GOMAXPROCS(4) //GO最大CPU数目
+
+	rn := MakeNetwork()
+	defer rn.Cleanup()
+
+	e := rn.MakeEnd("testEnd")
+
+	js := &MyServer{} //RPC方法具体修改这个结构体
+	js.id = 1000
+	svc := MakeService(js)
+
+	rs := MakeServer()
+	rs.AddService(svc)
+	rn.AddServer("server!", rs)
+
+	rn.Connect("testEnd", "server!")
+	rn.Enable("testEnd", true)
+
+	worker := "w-0"
+	rt := &Task{}
+	for i := 0; i < 10; i++ {
+		e.Call("MyServer.FuckAskForWork", worker, rt)
+		fmt.Printf("%#v\n", rt)
+	}
+	fmt.Printf("%#v\n", rt)
+}
+
+func TestArray(t *testing.T) {
+	runtime.GOMAXPROCS(4) //GO最大CPU数目
+
+	rn := MakeNetwork()
+	defer rn.Cleanup()
+
+	e := rn.MakeEnd("testEnd")
+
+	js := &MyServer{} //RPC方法具体修改这个结构体
+	svc := MakeService(js)
+
+	rs := MakeServer()
+	rs.AddService(svc)
+	rn.AddServer("server!", rs)
+
+	rn.Connect("testEnd", "server!")
+	rn.Enable("testEnd", true)
+
+	rt := &Output{}
+	e.Call("MyServer.FuckArray", &Task{}, &rt)
+	fmt.Printf("%#v\n", rt)
+
+	rt2 := []string{"abc", "def"}
+	e.Call("MyServer.FuckArray2", &Task{}, &rt2)
+	fmt.Printf("%s\n", rt2)
+}
+func ihash(key string) int {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return int(h.Sum32() & 0x7fffffff)
+}
+func TestHash(t *testing.T) {
+	fmt.Println(ihash("A"))
+	fmt.Println(ihash("About"))
+	fmt.Println(ihash("ABOUT"))
 }
 
 func TestBasic(t *testing.T) {
