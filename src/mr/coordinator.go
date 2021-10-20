@@ -15,7 +15,6 @@ import "os"
 import "net/rpc"
 import "net/http"
 
-//todo crash test
 type Coordinator struct {
 	mapJobs               chan *Task       //模拟队列
 	reduceJobs            chan *Task       //模拟队列
@@ -27,8 +26,8 @@ type Coordinator struct {
 	mu                    sync.Mutex
 	M, R                  int
 	doneMaps, doneReduces int
-	workerId              uint64 //自增处理，如果复用的话，会出现认为挂了但是没挂，导致id重复
-	whoDoesMapJob         map[string]*Task
+	workerId              uint64               //自增处理，如果复用的话，会出现认为挂了但是没挂，导致id重复
+	whoDoesMapJob         map[string][]*Output //一个节点可以做过多个map任务
 }
 
 func (c *Coordinator) Connect(e *Empty, id *string) error {
@@ -61,19 +60,24 @@ func (c *Coordinator) AskForWork(worker string, task *Task) error {
 		Debug("%s 发送AskForWork请求，但是任务已经结束", worker)
 		return nil
 	}
+	//DEBUG
+	var tt []string
+	for k, v := range c.workers {
+		if v != nil {
+			tt = append(tt, k)
+		}
+	}
 	if c.stage == 0 {
 		if len(c.mapJobs) == 0 {
-			Debug("%s 在阶段 %d 获取任务失败，因为队列map为空", worker, c.stage)
+			Debug("%s 在阶段 %d 获取任务失败，因为队列map为空\n对应的正在进行的任务为 %d 个，有 %#v,doneMaps=%d", worker, c.stage, len(tt), tt, c.doneMaps)
 			//task = nil这样只会修改本地变量，就会导致rpc远程的响应struct不变
 			*task = Task{-999, 100, []string{"获取任务失败，因为队列map为空"}, c.R}
 			return nil
 		}
 		job = <-c.mapJobs
-		//todo 这个应该再finish中
-		c.whoDoesMapJob[worker] = job
 	} else {
 		if len(c.reduceJobs) == 0 {
-			Debug("%s 在阶段 %d 获取任务失败，因为队列reduce为空", worker, c.stage)
+			Debug("%s 在阶段 %d 获取任务失败，因为队列reduce为空\n对应的正在进行的任务为 %d 个，有 %#v,doneReduces=%d", worker, c.stage, len(tt), tt, c.doneReduces)
 			*task = Task{-1000, 100, []string{"获取任务失败，因为队列reduce为空"}, c.R}
 			return nil
 		}
@@ -96,10 +100,10 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 		c.workers[worker] = nil
 		*empty = Empty{IsDown: true}
 		if output.Task.Type == 0 {
-			Debug("拒绝一个认为是下线的节点的map输出 %#v", output)
+			Debug("拒绝一个认为是下线的节点的map输出 %#v", *output)
 			return nil //不接收输出
 		} else {
-			Debug("接收一个认为是下线的节点的reduce输出 %#v", output)
+			Debug("接收一个认为是下线的节点的reduce输出 %#v", *output)
 		}
 	} else {
 		c.workers[worker] = nil
@@ -107,10 +111,13 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 	if output.Task.Type == 0 {
 		//map
 		c.doneMaps++
-		//可能一个节点认为挂了，但是没挂，导致又收到了一个success
+		if _, ok := c.whoDoesMapJob[worker]; !ok {
+			c.whoDoesMapJob[worker] = []*Output{}
+		}
+		c.whoDoesMapJob[worker] = append(c.whoDoesMapJob[worker], output)
 
 		//处理输出
-		Debug("%s map-%d 任务完成,响应为 %#v", worker, output.Task.TaskId, output)
+		Debug("%s map-%d 任务完成,响应为 %#v", worker, output.Task.TaskId, *output)
 		sort.Strings(output.OutputLocation)
 		// 必须排序，因为输出根据hash，是无序的！，所以要根据mod分类，但是mod不一定是满的，比如mod5，可能只有2个值，0和3
 		//为了简便直接改这里了，应该改output结构定义为map的
@@ -128,8 +135,21 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 			Debug("对应的reduceInputs为 %#v", c.reduceInputs)
 			//创建task
 			//map是哈希的，默认是无序的,其实不排序也行
-			//todo 重新重新进入map阶段的情况下，任务队列中的任务的输入需要完全改动，需要手动读出所有任务，然后重新放进去
+			//重新重新进入map阶段的情况下，任务队列中的任务的输入需要完全改动，需要手动读出所有任务，然后重新放进去
+			if len(c.reduceJobs) != 0 {
+				for i := 0; i < len(c.reduceJobs); i++ {
+					_ = <-c.reduceJobs
+				}
+			}
+			Debug("WARN：丢弃所有reduceJobs！")
 			for i := 0; i < len(c.reduceInputs); i++ {
+				//fixme 直接模拟输入
+				c.reduceInputs[i] = []string{}
+				for j := 0; j < c.M; j++ {
+					name := fmt.Sprintf("mr-%d-%d.txt", j, i)
+					c.reduceInputs[i] = append(c.reduceInputs[i], name)
+				}
+
 				Debug("新增task %#v", Task{i, 1, c.reduceInputs[i], c.R})
 				c.reduceJobs <- &Task{i, 1, c.reduceInputs[i], c.R}
 			}
@@ -141,7 +161,7 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 			return nil
 		}
 		if output.Status == 0 {
-			Debug("%s reduce-%d 任务完成,响应为 %#v", worker, output.Task.TaskId, output)
+			Debug("%s reduce-%d 任务完成,响应为 %#v", worker, output.Task.TaskId, *output)
 			c.doneReduces++
 		} else if output.Status == 2 {
 			Debug("%s reduce-%d 重命名失败", worker, output.Task.TaskId)
@@ -150,10 +170,6 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 	return nil
 }
 
-//挂了之后需要清除worker map的id
-//map挂了需要转为阶段0
-//reduce挂了可以重新分配任务
-//故障的解决办法就是重新connect，重新分配id
 func (c *Coordinator) HeartBeat(worker string, empty *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock() //简单处理
@@ -168,7 +184,7 @@ func (c *Coordinator) HeartBeat(worker string, empty *Empty) error {
 func checkHeartBeat(c *Coordinator) {
 	Debug("心跳检测线程启动")
 	for {
-		time.Sleep(time.Duration(10) * time.Second)
+		time.Sleep(time.Duration(6) * time.Second)
 		Debug("checkHeartBeat: 开始检查")
 		c.mu.Lock()
 		if c.R+c.M == c.doneReduces+c.doneMaps {
@@ -184,38 +200,42 @@ func checkHeartBeat(c *Coordinator) {
 				delete(c.workers, k)
 				fall = append(fall, k)
 
-				//检查是否曾经做过map
-				//if task, ok := c.whoDoesMapJob[k]; ok {
-				//	Debug("checkHeartBeat: 做过map的 %s 挂了", k)
-				//	c.stage = 0
-				//	c.mapJobs <- task
-				//}
-
 				//处理任务重做
-				//todo 这里暂时简单处理，即只处理正在运行的map挂了的情况
+				//检查是否曾经做过map
+				if v, ok := c.whoDoesMapJob[k]; ok {
+					Debug("挂了的节点%s曾经做过map任务%#v", k, v)
+					c.stage = 0
+					c.doneMaps -= len(v)
+					for _, t := range v {
+						Debug("重做 map任务 %#v", *t)
+						c.mapJobs <- t.Task
+						//todo 删除reduce inputs,但是很麻烦，所以就直接模拟输出了
+					}
+					delete(c.whoDoesMapJob, k)
+				}
 				//worker可能没有任务，比如刚上线就掉线了
 				if v == nil {
 					continue
 				} else if v.Type == 0 {
 					//map
 					if c.stage == 1 {
-						Debug("在reduce阶段检测到map阶段的任务 %s：%#v", k, v)
+						Debug("在reduce阶段检测到map阶段的任务 %s：%#v", k, *v)
 						//reduce阶段可能，在workers中检测到map阶段挂掉的任务（因为心跳检测10s一次），而此时就不要加入队列了
 						continue
 					}
 					//Debug("checkHeartBeat: map %#v 重做，重新转换为状态0", v)
-					Debug("checkHeartBeat: map %#v 重做", v)
+					Debug("checkHeartBeat: map %#v 重做", *v)
 					//c.stage = 0 因为
 					//c.doneMaps-- //曾经做过map的节点挂了的话，才需要--
 					c.mapJobs <- v
 					//重做map
 				} else if v.Type == 1 {
 					//reduce
-					Debug("checkHeartBeat: reduce %#v 重做", v)
+					Debug("checkHeartBeat: reduce %#v 重做", *v)
 					c.reduceJobs <- v
 					//因为finishwork的不用重做，所以不用--
 				} else {
-					Debug("checkHeartBeat: ERROR: %s 未知的任务 %#v", k, v)
+					Debug("checkHeartBeat: ERROR: %s 未知的任务 %#v", k, *v)
 				}
 			}
 		}
@@ -269,12 +289,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.reduceInputs = make(map[int][]string) //!
 	c.workers = make(map[string]*Task)
 	c.heartbeatMap = make(map[string]bool)
-	c.whoDoesMapJob = make(map[string]*Task)
+	c.whoDoesMapJob = make(map[string][]*Output)
 	c.M = len(files)
 	c.R = nReduce
 	for i, file := range files {
 		c.mapInputs[i] = file
-		c.mapJobs <- &Task{i + 100, 0, []string{file}, c.R}
+		c.mapJobs <- &Task{i, 0, []string{file}, c.R}
 	}
 	//初始化，避免某个mod的key不存在
 	for i := 0; i < nReduce; i++ {

@@ -25,17 +25,17 @@ type Empty struct {
 }
 
 func Debug(format string, a ...interface{}) {
-	mu.Lock()
-	if !p {
-		p = true
-		inits()
-	}
-	mu.Unlock()
-	if debug {
-		fmt.Printf(format, a)
-		fmt.Println()
-	}
-	log.Printf(format, a...)
+	//mu.Lock()
+	//if !p {
+	//	p = true
+	//	inits()
+	//}
+	//mu.Unlock()
+	//if debug {
+	//	fmt.Printf(format, a)
+	//	fmt.Println()
+	//}
+	//log.Printf(format, a...)
 }
 
 func inits() {
@@ -87,8 +87,6 @@ func PathExists(path string) (bool, error) {
 	}
 	return false, err
 }
-
-// Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
