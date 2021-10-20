@@ -61,7 +61,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		if task.TaskId == -999 || task.TaskId == -1000 {
 			//暂无任务
 			Debug("暂无任务，所以sleep 1秒,%s", workerId, task.InputLocation[0])
-			time.Sleep(time.Duration(1) * time.Second)
+			time.Sleep(time.Duration(2) * time.Second)
 			continue
 		} else if !b || task.TaskId == -1 {
 			//已经结束,两种情况，master关闭或者还在运行

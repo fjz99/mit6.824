@@ -1,7 +1,9 @@
 package labrpc
 
 import (
+	"6.824/mr"
 	"hash/fnv"
+	"log"
 	"os"
 	"testing"
 )
@@ -213,6 +215,30 @@ func TestRename(t *testing.T) {
 		fmt.Println("dsadsa")
 		fmt.Println(err)
 	}
+}
+
+func TestLogfile(t *testing.T) {
+	fmt.Println("初始化log")
+	file := "master.log"
+	index := 1
+	if b, _ := mr.PathExists(file); b {
+		file = "worker-0.log"
+		fmt.Println("master.log不行 ,现在改为", file)
+	}
+	//注意，for循环的第一个是初始值
+	for b, _ := mr.PathExists(file); b; b, _ = mr.PathExists(file) {
+		fmt.Printf("%s 不行\n", file)
+		file = fmt.Sprintf("worker-%d.log", index)
+		index++
+	}
+	fmt.Printf("日志文件: %s\n", file)
+	logFile, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0766)
+	if err != nil {
+		panic(err)
+	}
+	log.SetOutput(logFile) // 将文件设置为log输出的文件
+	//log.SetPrefix("[qSkipTool]")
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
 
 func TestBasic(t *testing.T) {

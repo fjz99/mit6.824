@@ -25,12 +25,12 @@ type Empty struct {
 }
 
 func Debug(format string, a ...interface{}) {
-	//mu.Lock()
-	//if !p {
-	//	p = true
-	//	//inits()
-	//}
-	//mu.Unlock()
+	mu.Lock()
+	if !p {
+		p = true
+		inits()
+	}
+	mu.Unlock()
 	if debug {
 		fmt.Printf(format, a)
 		fmt.Println()
@@ -44,7 +44,8 @@ func inits() {
 	if b, _ := PathExists(file); b {
 		file = "worker-0.log"
 	}
-	for b, _ := PathExists(file); b; {
+	//注意，for循环的第一个是初始值
+	for b, _ := PathExists(file); b; b, _ = PathExists(file) {
 		file = fmt.Sprintf("worker-%d.log", index)
 		index++
 	}
@@ -54,8 +55,7 @@ func inits() {
 		panic(err)
 	}
 	log.SetOutput(logFile) // 将文件设置为log输出的文件
-	//log.SetPrefix("[qSkipTool]")
-	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
 
 type Task struct {
