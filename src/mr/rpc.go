@@ -7,21 +7,55 @@ package mr
 //
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"sync"
 )
 import "strconv"
 
 const debug = false
 
+var p = false
+var mu = sync.Mutex{}
+
 type Empty struct {
 	Worker string
+	IsDown bool
 }
 
 func Debug(format string, a ...interface{}) {
+	//mu.Lock()
+	//if !p {
+	//	p = true
+	//	//inits()
+	//}
+	//mu.Unlock()
 	if debug {
-		log.Printf(format, a...)
+		fmt.Printf(format, a)
+		fmt.Println()
 	}
+	log.Printf(format, a...)
+}
+
+func inits() {
+	file := "master.log"
+	index := 1
+	if b, _ := PathExists(file); b {
+		file = "worker-0.log"
+	}
+	for b, _ := PathExists(file); b; {
+		file = fmt.Sprintf("worker-%d.log", index)
+		index++
+	}
+	fmt.Printf("日志文件: %s\n", file)
+	logFile, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0766)
+	if err != nil {
+		panic(err)
+	}
+	log.SetOutput(logFile) // 将文件设置为log输出的文件
+	//log.SetPrefix("[qSkipTool]")
+	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
 }
 
 type Task struct {
@@ -40,6 +74,18 @@ type Output struct {
 type FinishWorkReq struct {
 	Output   *Output
 	WorkerId string
+}
+
+func PathExists(path string) (bool, error) {
+
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // Add your RPC definitions here.

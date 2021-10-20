@@ -143,7 +143,7 @@ func MakeNetwork() *Network {
 	rn.ends = map[interface{}]*ClientEnd{}
 	rn.enabled = map[interface{}]bool{}
 	rn.servers = map[interface{}]*Server{}
-	rn.connections = map[interface{}](interface{}){}
+	rn.connections = map[interface{}]interface{}{}
 	rn.endCh = make(chan reqMsg)
 	rn.done = make(chan struct{})
 
@@ -221,7 +221,7 @@ func (rn *Network) processReq(req reqMsg) {
 	if enabled && servername != nil && server != nil {
 		if reliable == false {
 			// short delay
-			ms := (rand.Int() % 27)
+			ms := rand.Int() % 27
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
@@ -295,11 +295,11 @@ func (rn *Network) processReq(req reqMsg) {
 		if rn.longDelays {
 			// let Raft tests check that leader doesn't send
 			// RPCs synchronously.
-			ms = (rand.Int() % 7000)
+			ms = rand.Int() % 7000
 		} else {
 			// many kv tests require the client to try each
 			// server in fairly rapid succession.
-			ms = (rand.Int() % 100)
+			ms = rand.Int() % 100
 		}
 		time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
 			req.replyCh <- replyMsg{false, nil}
@@ -420,7 +420,7 @@ func (rs *Server) dispatch(req reqMsg) replyMsg {
 		return service.dispatch(methodName, req)
 	} else {
 		choices := []string{}
-		for k, _ := range rs.services {
+		for k := range rs.services {
 			choices = append(choices, k)
 		}
 		log.Fatalf("labrpc.Server.dispatch(): unknown service %v in %v.%v; expecting one of %v\n",
@@ -503,7 +503,7 @@ func (svc *Service) dispatch(methname string, req reqMsg) replyMsg {
 		return replyMsg{true, rb.Bytes()}
 	} else {
 		choices := []string{}
-		for k, _ := range svc.methods {
+		for k := range svc.methods {
 			choices = append(choices, k)
 		}
 		log.Fatalf("labrpc.Service.dispatch(): unknown method %v in %v; expecting one of %v\n",

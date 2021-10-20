@@ -2,6 +2,7 @@ package labrpc
 
 import (
 	"hash/fnv"
+	"os"
 	"testing"
 )
 import "strconv"
@@ -199,6 +200,19 @@ func TestHash(t *testing.T) {
 	fmt.Println(ihash("A"))
 	fmt.Println(ihash("About"))
 	fmt.Println(ihash("ABOUT"))
+}
+
+func TestRename(t *testing.T) {
+	f1, _ := os.Create("b.txt")
+	f1.Close()
+	f2, _ := os.Create("a.txt")
+	f2.Close()
+	time.Sleep(time.Duration(2) * time.Second)
+	err := os.Rename("a.txt", "b.txt")
+	if err != nil {
+		fmt.Println("dsadsa")
+		fmt.Println(err)
+	}
 }
 
 func TestBasic(t *testing.T) {
