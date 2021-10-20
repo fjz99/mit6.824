@@ -14,10 +14,11 @@ import "net/rpc"
 import "hash/fnv"
 
 //todo down了的话，master清除文件映射
-// map任务在的机器挂了的话，需要重做
+//todo map任务在的机器挂了的话，需要重做
 //todo 重做map重复问题
-//fixme 如果检查时刚好心跳检测到了，但是其实挂了，因为map被清空了，此时根本不知道挂了；但是没有finish，为什么没有死锁？
-//fixme 时间区间问题，比如刚上线还没发心跳就检查了，或者刚检查完就挂了；这个没问题关键在于为啥任务没做完就停止了,因为finish了2次reduce6
+//fixme 似乎有日志输出文件的时候，测试shell脚本执行会很慢
+//fixme 日志输出文件名
+
 //todo map完成之后再挂了相关的问题：1.任务队列中的任务的输入需要完全改动，需要手动读出所有任务，然后重新放进去
 //2. 维护一个谁做了map的Map，而且在finish时添加
 //3.维护每个reduce任务的输入的map也需要先删除输入，在添加新的（数组原地修改就行）
@@ -44,8 +45,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	mu := &sync.Mutex{}
 
 	workerId := ""
-	go sendHearBeat(&workerId, mu)
-restart:
+	go sendHeartBeat(&workerId, mu)
 	mu.Lock()
 	call("Coordinator.Connect", &Empty{}, &workerId)
 	mu.Unlock()
@@ -68,8 +68,7 @@ restart:
 			Debug("%s stop", workerId)
 			os.Exit(0)
 		} else if task.TaskId == 8888 {
-			Debug("被认为挂了，重新connect！")
-			goto restart
+			Debug("%s 被认为挂了，已经重新connect", workerId)
 		} else if task.Type == 0 {
 			//map
 			output = processMap(mapf, task, workerId)
@@ -81,8 +80,7 @@ restart:
 		reply := &Empty{}
 		call("Coordinator.FinishWork", &FinishWorkReq{output, workerId}, reply)
 		if reply.IsDown {
-			Debug("被认为挂了，重新connect！")
-			goto restart
+			Debug("%s 被认为挂了，已经重新connect", workerId)
 		}
 	}
 }
@@ -98,7 +96,7 @@ func processMap(mapf func(string, string) []KeyValue, task *Task, workerId strin
 	file.Close()
 	kva := mapf(filename, string(content))
 	//存储键值对
-	//sort.Sort(ByKey(kva)) //?似乎不需要排序,因为已经hash了
+	//不需要排序,因为已经hash了
 	files := make(map[string][]KeyValue)
 	output := Output{task, 100, nil}
 	for _, kv := range kva {
@@ -192,7 +190,7 @@ func openFile(name string) *os.File {
 	return file
 }
 
-func sendHearBeat(worker *string, mu *sync.Mutex) {
+func sendHeartBeat(worker *string, mu *sync.Mutex) {
 	for {
 		time.Sleep(time.Duration(1) * time.Second)
 		//指针还未初始化

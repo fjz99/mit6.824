@@ -36,6 +36,7 @@ func (c *Coordinator) Connect(e *Empty, id *string) error {
 	*id = fmt.Sprintf("worker-%d", c.workerId)
 	c.workers[*id] = nil
 	c.workerId++
+	c.heartbeatMap[*id] = true //保证通过第一次测试
 	Debug("%s connected", *id)
 	c.mu.Unlock()
 	return nil
@@ -49,6 +50,8 @@ func (c *Coordinator) AskForWork(worker string, task *Task) error {
 	//检查是否worker被认为挂了
 	if _, ok := c.workers[worker]; !ok {
 		Debug("已经挂了的节点！ %s ", worker)
+		Debug("%s 节点被错误的认为下线,重新添加回去", worker)
+		c.workers[worker] = nil
 		*task = Task{TaskId: 8888, Type: 100}
 		return nil
 	}
@@ -89,6 +92,8 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.workers[worker]; !ok {
+		Debug("%s 节点被错误的认为下线,重新添加回去", worker)
+		c.workers[worker] = nil
 		*empty = Empty{IsDown: true}
 		if output.Task.Type == 0 {
 			Debug("拒绝一个认为是下线的节点的map输出 %#v", output)
@@ -152,6 +157,10 @@ func (c *Coordinator) FinishWork(req *FinishWorkReq, empty *Empty) error {
 func (c *Coordinator) HeartBeat(worker string, empty *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock() //简单处理
+	if _, ok := c.workers[worker]; !ok {
+		Debug("%s 节点被错误的认为下线,重新添加回去", worker)
+		c.workers[worker] = nil
+	}
 	c.heartbeatMap[worker] = true
 	return nil
 }
