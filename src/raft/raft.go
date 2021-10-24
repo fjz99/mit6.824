@@ -1,16 +1,18 @@
 package raft
 
-//
+//todo 处理超时导致没有执行2个callback的问题
+//todo leader选举成功后，死锁在channel的状态转换处
+
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
 // each of these functions for more details.
 //
 // rf = Make(...)
 //   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
+// rf.Start(Command interface{}) (Index, Term, isleader)
 //   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
+// rf.GetState() (Term, isLeader)
+//   ask a Raft for its current Term, and whether it thinks it is leader
 // ApplyMsg
 //   each time a new entry is committed to the log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
@@ -18,62 +20,187 @@ package raft
 //
 
 import (
-//	"bytes"
+	"math/rand"
+	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
-//	"6.824/labgob"
+	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
+const ChannelSize = 10
+const HeartbeatInterval = time.Duration(100) * time.Millisecond
+const MaxElectionInterval = time.Duration(400) * time.Millisecond
 
-//
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-//
-type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	CommandIndex int
+//每个发送线程
+//peerIndex 即对应的在peer数组的偏移
+func (rf *Raft) messageSender(peerIndex int) {
+	Debug(dLog, "发送线程 %d 初始化成功", rf.me, G(rf.state), peerIndex)
+	ch := rf.senderChannel[peerIndex]
+	endpoint := rf.peers[peerIndex]
+	prefix := "发送线程 %d "
 
-	// For 2D:
-	SnapshotValid bool
-	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
+	for !rf.killed() {
+		task := <-ch
+		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
+		Debug(dLog, prefix+"对 S%d 发送请求 %#v", rf.me, G(rf.state), peerIndex, peerIndex, task.args)
+		rf.TimedWait(rf.oneTurnTimeout,
+			func(rf *Raft) {
+				Debug(dLog, prefix+"rpc请求超时%#v", rf.me, G(rf.state), peerIndex, task.args)
+				//因为rpc超时时间一定小于选举超时时间，所以就可以
+				task.errorCallback(peerIndex, rf, task.args, task.reply)
+			},
+			func() interface{} {
+				return endpoint.Call(task.rpcMethod, task.args, task.reply)
+			},
+			func(rf *Raft, result interface{}) {
+				ok := result.(bool)
+				if !ok {
+					Debug(dLog, prefix+"请求失败 %#v", rf.me, G(rf.state), peerIndex, task.args)
+					task.errorCallback(peerIndex, rf, task.args, task.reply)
+					//if again := task.errorCallback(peerIndex, rf, task.args, task.reply); again {
+					//	Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
+					//}
+				} else {
+					Debug(dLog, prefix+"返回结果 %#v", rf.me, G(rf.state), peerIndex, task.reply)
+					task.successCallback(peerIndex, rf, task.args, task.reply)
+				}
+			})
+	}
 }
 
+//每个发送线程
+//peerIndex 即对应的在peer数组的偏移
+//func (rf *Raft) messageSender(peerIndex int) {
+//	Debug(dLog, "发送线程 %d 初始化成功", peerIndex)
+//	ch := rf.senderChannel[peerIndex]
+//	endpoint := rf.peers[peerIndex]
+//	prefix := "发送线程 %d "
+//	waitedChan := make(chan bool)
+//	wrapper := func(task *Task) {
+//		err := endpoint.Call(task.rpcMethod, task.args, task.reply)
+//		waitedChan <- err
+//	}
 //
-// A Go object implementing a single Raft peer.
-//
-type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
+//	for !rf.killed() {
+//		task := <-ch
+//		t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
+//		//这种超时是同步超时
+//	tryAgain:
+//		go wrapper(task)
+//		Debug(dLog, prefix+"S%d 对 S%d 发送vote请求 %#v", peerIndex, rf.me, peerIndex, *task)
+//		select {
+//		case err := <-waitedChan:
+//			{
+//				if err {
+//					if GetNow()-t > rf.oneTurnTimeout.Microseconds() {
+//						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
+//						continue
+//					}
+//					Debug(dLog, prefix+"请求失败 %#v", peerIndex, task.args)
+//					if again := task.errorCallback(peerIndex, rf, task.args, task.reply); again {
+//						Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
+//						goto tryAgain //reply需要初始化，所以如果重试的话，需要在callback中初始化
+//					}
+//				} else {
+//					if GetNow()-t > rf.oneTurnTimeout.Microseconds() {
+//						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
+//						continue
+//					}
+//					Debug(dLog, prefix+"返回结果 %#v", peerIndex, task.reply)
+//					task.successCallback(peerIndex, rf, task.args, task.reply)
+//				}
+//				break
+//			}
+//		case _ = <-time.After(rf.oneTurnTimeout):
+//			{
+//				Debug(dLog, prefix+"rpc请求超时", peerIndex)
+//				break
+//			}
+//		}
+//	}
+//}
 
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
+//广播，然后收集等待过半返回，指定超时时间
+//日志复制的一种实现就是，区分传播轮次，每次广播的目标都是复制到leader的最新id，只要接收到过半就返回，此时可能还有发送线程在补日志，但是没事，只会影响下一轮次
+//这也不会影响心跳，因为appendEntriesRPC只要不是term问题，都可以更新lastAccessTime，所以心跳可以理解为会话超时
 
+//返回值为选举结束
+//Candidate
+func (rf *Raft) broadcastVote() bool {
+	Debug(dVote, "调用 broadcastVote", rf.me, G(rf.state))
+	rf.mu.Lock() //通过获得全局锁来控制广播轮次，否则会很混乱?
+	defer rf.mu.Unlock()
+	Debug(dVote, "调用 broadcastVote 进入临界区", rf.me, G(rf.state))
+	rf.state = CANDIDATE
+	rf.term++
+	rf.voteFor = rf.me
+	rf.doneRPCs = 0
+	rf.agreeCounter = 1
+	rf.leaderId = -1
+	localTerm := rf.term //因为可能在这个轮次中，返回term修改
+	var args *RequestVoteArgs
+
+	lens := len(rf.log)
+	if lens == 0 {
+		args = &RequestVoteArgs{rf.term, rf.me, -1, -1}
+	} else {
+		lastLog := rf.log[lens-1]
+		args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
+	}
+	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, G(rf.state), rf.term, *args)
+	for i := 0; i < rf.n; i++ {
+		if i != rf.me {
+			rf.senderChannel[i] <- &Task{voteFailureCallback,
+				voteSuccessCallback, args, &RequestVoteReply{}, "Raft.RequestVote"}
+			//注意reply每次都要创建新的才行
+		}
+	}
+	//rf.waitGroup.Add(rf.n / 2) //算上自己就是过半了！
+	//rf.mu.Unlock()             //!不会自动释放锁
+	//rf.waitGroup.Wait()
+	for true {
+		rf.broadCastCondition.Wait()
+		//重新获得了锁
+		//等待所有rpc结束，非常影响性能
+		Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, G(rf.state), rf.agreeCounter, rf.doneRPCs)
+		if rf.agreeCounter >= rf.n/2+1 || rf.doneRPCs == rf.n-1 {
+			break
+		}
+	}
+
+	//其他人变成leader
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
+	if rf.leaderId != -1 {
+		//心跳handler中处理了
+		Debug(dVote, "%d轮次选举完成，已发现新的leader S%d", rf.me, G(rf.state), rf.leaderId)
+		return true
+	}
+	if localTerm != rf.term {
+		//callback中修改了
+		Debug(dVote, "%d轮次选举完成，term修改为 %d,状态变为follower", rf.me, G(rf.state), localTerm, rf.term)
+		return true
+	}
+	if rf.agreeCounter >= rf.n/2+1 {
+		Debug(dVote, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, G(rf.state), localTerm, rf.agreeCounter, rf.me)
+		//主循环处理任何状态变更
+		rf.ChangeState(LEADER)
+		return true
+	} else {
+		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, G(rf.state), localTerm, rf.agreeCounter)
+		return false
+	}
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
-	// Your code here (2A).
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.term, rf.state == LEADER
 }
 
 //
@@ -91,7 +218,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -115,7 +241,6 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
@@ -128,41 +253,17 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 }
 
 // the service says it has created a snapshot that has
-// all info up to and including index. this means the
+// all info up to and including Index. this means the
 // service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
+// that Index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 
 }
 
-
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-}
-
-//
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	// Your data here (2A).
-}
-
-//
-// example RequestVote RPC handler.
-//
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
-}
-
 //
 // example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
+// server is the Index of the target server in rf.peers[].
 // expects RPC arguments in args.
 // fills in *reply with RPC reply, so caller should
 // pass &reply.
@@ -194,19 +295,18 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
+// agreement on the next Command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
 // agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
+// Command will ever be committed to the Raft log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
 // this function should return gracefully.
 //
-// the first return value is the index that the command will appear at
+// the first return value is the Index that the Command will appear at
 // if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
+// Term. the third return value is true if this server believes it is
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
@@ -215,7 +315,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -241,15 +340,149 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) broadCastHeartBeat() {
+	Debug(dLeader, "广播心跳", rf.me, G(rf.state))
+	for i := 0; i < rf.n; i++ {
+		if i != rf.me {
+			//Debug(dLeader, "leader：S%d 对 S%d发送心跳", rf.me, i)
+			args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
+			rf.senderChannel[i] <- &Task{heartBeatFailureCallback, heartBeatSuccessCallback,
+				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+		}
+	}
+}
+
+//初始化一个新的leader
+func (rf *Raft) initLeader() {
+	Debug(dLeader, "开始leader初始化!", rf.me, G(rf.state))
+	rf.leaderId = rf.me
+	rf.nextIndex = make([]int, rf.n)
+	rf.matchIndex = make([]int, rf.n)
+	SetArrayValue(rf.nextIndex, len(rf.log))
+	SetArrayValue(rf.matchIndex, -1)
+
+	//todo 一直持续广播，见fig.2，暂时广播一整个超时时间
+	//因为心跳广播不会等待结果，所以直接sleep，
+	//todo 心跳检测等待结果，决定是否主动降级
+	t := GetNow()
+	for true {
+		if GetNow()-t > MaxElectionInterval.Milliseconds() {
+			break
+		}
+		rf.broadCastHeartBeat()
+		time.Sleep(time.Duration(50) * time.Millisecond)
+	}
+
+	Debug(dLeader, "init leader done!", rf.me, G(rf.state))
+}
+
+//也要负责和状态转换有关的属性设置
+func (rf *Raft) processLeader() {
+	Debug(dInfo, "主循环进入 Leader", rf.me, G(rf.state))
+	select {
+	case states := <-rf.stateChanging:
+		{
+			rf.mu.Lock()
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			if states.to == CANDIDATE {
+				//CANDIDATE是超时转换的！
+				Debug(dError, "状态转换无效！ %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			} else {
+				//变成follower了
+				Debug(dLeader, "leader 被 S%d取代了！", rf.me, G(rf.state), rf.leaderId)
+				rf.voteFor = -1
+			}
+			rf.mu.Unlock()
+			break
+		}
+	case _ = <-time.After(HeartbeatInterval):
+		{
+			rf.broadCastHeartBeat()
+			break
+		}
+	}
+}
+
+func (rf *Raft) processFollower() {
+	//超时检查
+	Debug(dInfo, "主循环进入 follower", rf.me, G(rf.state))
+	//等待状态转换或者超时
+	select {
+	case states := <-rf.stateChanging:
+		{
+			rf.mu.Lock()
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to) //用于debug
+			if states.to == CANDIDATE || states.to == LEADER {
+				//CANDIDATE是超时转换的！
+				Debug(dError, "状态转换无效！ %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			}
+			rf.mu.Unlock()
+			break
+		}
+	case _ = <-time.After(rf.electionInterval):
+		{
+			rf.mu.Lock()
+			Debug(dVote, "校验超时 %d %d", rf.me, G(rf.state), GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
+			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
+				//选举超时
+				Debug(dVote, "超时，进入candidate，并开始选举", rf.me, G(rf.state))
+				rf.state = CANDIDATE
+				go rf.broadcastVote() //todo 保证这个线程会超时退出
+			}
+			rf.mu.Unlock()
+			break
+		}
+	}
+}
+
+func (rf *Raft) processCandidate() {
+	Debug(dInfo, "主循环进入 Candidate", rf.me, G(rf.state))
+	select {
+	case states := <-rf.stateChanging:
+		{
+			rf.mu.Lock()
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			if states.to == LEADER {
+				//变成leader了
+				rf.initLeader()
+			}
+			rf.mu.Unlock()
+			break
+		}
+	case _ = <-time.After(rf.electionInterval):
+		{
+			rf.mu.Lock()
+			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
+				//选举超时
+				Debug(dVote, "选举超时，candidate，再次开始选举", rf.me, G(rf.state))
+				go rf.broadcastVote()
+			}
+			rf.mu.Unlock()
+			break
+		}
+	}
+	Debug(dInfo, "主循环退出！ Candidate", rf.me, G(rf.state))
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
+// 心跳线程是真正的主线程
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-
+		rf.mu.Lock()
+		state := rf.state
+		rf.mu.Unlock()
+		switch state {
+		case LEADER:
+			rf.processLeader()
+			break
+		case CANDIDATE:
+			rf.processCandidate()
+			break
+		case FOLLOWER:
+			rf.processFollower()
+			break
+		}
 	}
 }
 
@@ -266,19 +499,40 @@ func (rf *Raft) ticker() {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+
+	InitLog() // 初始化日志系统
+
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.n = len(peers)
+	rf.applyCh = applyCh
+	rf.state = FOLLOWER
+	rf.commitIndex = -1
+	rf.lastApplied = -1
+	rf.broadCastCondition = sync.NewCond(&rf.mu)
+	rf.senderChannel = make([]chan *Task, rf.n)
+	rf.waitGroup = sync.WaitGroup{}
+	rf.oneTurnTimeout = time.Duration(200) * time.Millisecond //比选举超时时间少一些
+	rf.stateChanging = make(chan *ChangedState)
+	for i := 0; i < rf.n; i++ {
+		rf.senderChannel[i] = make(chan *Task, ChannelSize)
+		if i != me {
+			go rf.messageSender(i)
+		}
+	}
 
-	// Your initialization code here (2A, 2B, 2C).
+	//初始化选举超时时间
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rf.electionInterval = time.Duration(r.Int31n(150)+250) * time.Millisecond
+	Debug(dInfo, "选举超时时间为 %s", rf.me, G(rf.state), rf.electionInterval.String())
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
 
 	return rf
 }

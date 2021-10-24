@@ -184,7 +184,7 @@ func (c *Coordinator) HeartBeat(worker string, empty *Empty) error {
 func checkHeartBeat(c *Coordinator) {
 	Debug("心跳检测线程启动")
 	for {
-		time.Sleep(time.Duration(6) * time.Second)
+		time.Sleep(time.Duration(5) * time.Second)
 		Debug("checkHeartBeat: 开始检查")
 		c.mu.Lock()
 		if c.R+c.M == c.doneReduces+c.doneMaps {

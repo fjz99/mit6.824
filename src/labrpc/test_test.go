@@ -204,6 +204,14 @@ func TestHash(t *testing.T) {
 	fmt.Println(ihash("ABOUT"))
 }
 
+func TestTimer(t *testing.T) {
+	fmt.Println((time.Duration(10) * time.Millisecond).Microseconds())
+	fmt.Println(time.Now().UnixNano() / 1e6)
+	var last = time.Now().UnixNano() / 1e6
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	fmt.Println(time.Now().UnixNano()/1e6 - last)
+}
+
 func TestRename(t *testing.T) {
 	f1, _ := os.Create("b.txt")
 	f1.Close()
