@@ -51,7 +51,8 @@ func Debug(topic logTopic, format string, a ...interface{}) {
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
 		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
-		format = prefix + "S%d <%s> " + format
+		//format = prefix + "S%d <%s> " + format
+		format = prefix + "S%d " + format
 		log.Printf(format, a...)
 	}
 }
@@ -73,7 +74,7 @@ func getVerbosity() int {
 //caller heartbeat; appendEntry; election timeout;vote others
 func (rf *Raft) ResetTimer() {
 	rf.lastAccessTime = GetNow()
-	Debug(dTimer, "重置计时器", rf.me, G(rf.state))
+	Debug(dTimer, "重置计时器", rf.me)
 }
 
 func GetNow() int64 {
@@ -92,10 +93,8 @@ func (rf *Raft) getLastLog() LogEntry {
 func (rf *Raft) ChangeState(to State) {
 	if from := rf.state; from != to {
 		rf.state = to
-		Debug(dInfo, "状态转换fFffafasfas %d -> %d", rf.me, G(rf.state), from, to)
-		//todo 目前问题在于没有线程在读这个chan！所以死锁了
 		rf.stateChanging <- &ChangedState{from, to}
-		Debug(dInfo, "状态转换 %d -> %d", rf.me, G(rf.state), from, to)
+		Debug(dInfo, "状态转换 %d -> %d", rf.me, from, to)
 	}
 }
 
@@ -117,7 +116,7 @@ func (rf *Raft) increaseTerm(newTerm int) {
 	rf.leaderId = -1
 	rf.term = newTerm
 	rf.ChangeState(FOLLOWER)
-	Debug(dTerm, "set Term = %d", rf.me, G(rf.state), newTerm)
+	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
 
 func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
@@ -139,18 +138,5 @@ func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
 			timeoutCallback(rf)
 			break
 		}
-	}
-}
-
-func G(state State) string {
-	switch state {
-	case LEADER:
-		return "leader"
-	case CANDIDATE:
-		return "candidate"
-	case FOLLOWER:
-		return "follower"
-	default:
-		return "fuckyou!"
 	}
 }

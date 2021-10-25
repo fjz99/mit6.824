@@ -57,7 +57,8 @@ type LogEntry struct {
 
 //发送线程的任务
 type Task struct {
-	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool //reply 用于传指针，实现reply的初始化，完成rpc
+	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool
+	//reply 用于传指针，实现reply的初始化，完成rpc
 	//返回值为是否重试 参数都是指针，reply需要初始化，所以如果重试的话，需要在callback中初始化
 	//这个callback会在超时或者rpc返回false时调用
 
@@ -96,7 +97,7 @@ type Raft struct {
 
 	lastAccessTime   int64 //用于心跳检测
 	electionInterval time.Duration
-	oneTurnTimeout   time.Duration
+	rpcTimeout       time.Duration
 	log              []LogEntry
 }
 

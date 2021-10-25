@@ -37,20 +37,27 @@ const MaxElectionInterval = time.Duration(400) * time.Millisecond
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
 func (rf *Raft) messageSender(peerIndex int) {
-	Debug(dLog, "发送线程 %d 初始化成功", rf.me, G(rf.state), peerIndex)
+	Debug(dLog, "发送线程 %d 初始化成功", rf.me, peerIndex)
 	ch := rf.senderChannel[peerIndex]
 	endpoint := rf.peers[peerIndex]
 	prefix := "发送线程 %d "
+	counter := 0
 
 	for !rf.killed() {
 		task := <-ch
 		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
-		Debug(dLog, prefix+"对 S%d 发送请求 %#v", rf.me, G(rf.state), peerIndex, peerIndex, task.args)
-		rf.TimedWait(rf.oneTurnTimeout,
+		Debug(dLog, prefix+"对 S%d 发送请求 %#v", rf.me, peerIndex, peerIndex, task.args)
+		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
-				Debug(dLog, prefix+"rpc请求超时%#v", rf.me, G(rf.state), peerIndex, task.args)
+				Debug(dLog, prefix+"rpc请求超时%#v", rf.me, peerIndex, task.args)
+				counter++
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
-				task.RpcErrorCallback(peerIndex, rf, task.args, task.reply)
+				if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
+					Debug(dLog, prefix+"rpc请求超时%#v,重试!!", rf.me, peerIndex, task.args)
+					ch <- task
+				} else {
+					counter = 0
+				}
 			},
 			func() interface{} {
 				return endpoint.Call(task.rpcMethod, task.args, task.reply)
@@ -58,16 +65,24 @@ func (rf *Raft) messageSender(peerIndex int) {
 			func(rf *Raft, result interface{}) {
 				ok := result.(bool)
 				if !ok {
-					Debug(dLog, prefix+"请求失败 %#v", rf.me, G(rf.state), peerIndex, task.args)
-					task.RpcErrorCallback(peerIndex, rf, task.args, task.reply)
-					//if again := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply); again {
-					//	Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
-					//}
+					Debug(dLog, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
+					counter++
+					//这个是rpc库本身请求失败
+					if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
+						Debug(dLog, prefix+"请求失败%#v,重试!!", rf.me, peerIndex, task.args)
+						ch <- task
+					} else {
+						counter = 0
+					}
 				} else {
-					Debug(dLog, prefix+"返回结果 %#v", rf.me, G(rf.state), peerIndex, task.reply)
+					Debug(dLog, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
 					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply)
+					counter = 0
 				}
 			})
+		if counter == 0 {
+			Debug(dLog, prefix+"对 S%d 发送请求完成！ %#v", rf.me, peerIndex, peerIndex, task.args)
+		}
 	}
 }
 
@@ -95,7 +110,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //		case err := <-waitedChan:
 //			{
 //				if err {
-//					if GetNow()-t > rf.oneTurnTimeout.Microseconds() {
+//					if GetNow()-t > rf.rpcTimeout.Microseconds() {
 //						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
 //						continue
 //					}
@@ -105,7 +120,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //						goto tryAgain //reply需要初始化，所以如果重试的话，需要在callback中初始化
 //					}
 //				} else {
-//					if GetNow()-t > rf.oneTurnTimeout.Microseconds() {
+//					if GetNow()-t > rf.rpcTimeout.Microseconds() {
 //						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
 //						continue
 //					}
@@ -114,7 +129,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //				}
 //				break
 //			}
-//		case _ = <-time.After(rf.oneTurnTimeout):
+//		case _ = <-time.After(rf.rpcTimeout):
 //			{
 //				Debug(dLog, prefix+"rpc请求超时", peerIndex)
 //				break
@@ -130,10 +145,9 @@ func (rf *Raft) messageSender(peerIndex int) {
 //返回值为选举结束
 //Candidate
 func (rf *Raft) broadcastVote() bool {
-	Debug(dVote, "调用 broadcastVote", rf.me, G(rf.state))
+	Debug(dVote, "调用 broadcastVote", rf.me)
 	rf.mu.Lock() //通过获得全局锁来控制广播轮次，否则会很混乱?
 	defer rf.mu.Unlock()
-	Debug(dVote, "调用 broadcastVote 进入临界区", rf.me, G(rf.state))
 	rf.state = CANDIDATE
 	rf.term++
 	rf.voteFor = rf.me
@@ -150,7 +164,7 @@ func (rf *Raft) broadcastVote() bool {
 		lastLog := rf.log[lens-1]
 		args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
 	}
-	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, G(rf.state), rf.term, *args)
+	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, rf.term, *args)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			rf.senderChannel[i] <- &Task{voteRpcFailureCallback,
@@ -165,7 +179,7 @@ func (rf *Raft) broadcastVote() bool {
 		rf.broadCastCondition.Wait()
 		//重新获得了锁
 		//等待所有rpc结束，非常影响性能
-		Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, G(rf.state), rf.agreeCounter, rf.doneRPCs)
+		Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, rf.agreeCounter, rf.doneRPCs)
 		if rf.agreeCounter >= rf.n/2+1 || rf.doneRPCs == rf.n-1 {
 			break
 		}
@@ -176,21 +190,21 @@ func (rf *Raft) broadcastVote() bool {
 	//defer rf.mu.Unlock()
 	if rf.leaderId != -1 {
 		//心跳handler中处理了
-		Debug(dVote, "%d轮次选举完成，已发现新的leader S%d", rf.me, G(rf.state), rf.leaderId)
+		Debug(dVote, "%d轮次选举完成，已发现新的leader S%d", rf.me, rf.leaderId)
 		return true
 	}
 	if localTerm != rf.term {
 		//callback中修改了
-		Debug(dVote, "%d轮次选举完成，term修改为 %d,状态变为follower", rf.me, G(rf.state), localTerm, rf.term)
+		Debug(dVote, "%d轮次选举完成，term修改为 %d,状态变为follower", rf.me, localTerm, rf.term)
 		return true
 	}
 	if rf.agreeCounter >= rf.n/2+1 {
-		Debug(dVote, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, G(rf.state), localTerm, rf.agreeCounter, rf.me)
+		Debug(dVote, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
 		//主循环处理任何状态变更
 		rf.ChangeState(LEADER)
 		return true
 	} else {
-		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, G(rf.state), localTerm, rf.agreeCounter)
+		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, localTerm, rf.agreeCounter)
 		return false
 	}
 }
@@ -341,10 +355,10 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) broadCastHeartBeat() {
-	Debug(dLeader, "广播心跳", rf.me, G(rf.state))
+	Debug(dLeader, "广播心跳", rf.me)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
-			//Debug(dLeader, "leader：S%d 对 S%d发送心跳", rf.me, i)
+			//Debug(dLeader, "对 S%d发送心跳", rf.me, i)
 			args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
 			rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
 				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
@@ -354,42 +368,46 @@ func (rf *Raft) broadCastHeartBeat() {
 
 //初始化一个新的leader
 func (rf *Raft) initLeader() {
-	Debug(dLeader, "开始leader初始化!", rf.me, G(rf.state))
+	Debug(dLeader, "开始leader初始化!", rf.me)
+	//细粒度锁
+	rf.mu.Lock()
 	rf.leaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
 	SetArrayValue(rf.nextIndex, len(rf.log))
 	SetArrayValue(rf.matchIndex, -1)
+	rf.mu.Unlock()
 
-	//todo 一直持续广播，见fig.2，暂时广播一整个超时时间
-	//因为心跳广播不会等待结果，所以直接sleep，
+	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
 	//todo 心跳检测等待结果，决定是否主动降级
-	t := GetNow()
-	for true {
-		if GetNow()-t > MaxElectionInterval.Milliseconds() {
-			break
-		}
-		rf.broadCastHeartBeat()
-		time.Sleep(time.Duration(50) * time.Millisecond)
-	}
+	rf.broadCastHeartBeat()
 
-	Debug(dLeader, "init leader done!", rf.me, G(rf.state))
+	//t := GetNow()
+	//for true {
+	//	if GetNow()-t > MaxElectionInterval.Milliseconds() {
+	//		break
+	//	}
+	//	rf.broadCastHeartBeat()
+	//	time.Sleep(time.Duration(50) * time.Millisecond)
+	//}
+
+	Debug(dLeader, "init leader done!", rf.me)
 }
 
 //也要负责和状态转换有关的属性设置
 func (rf *Raft) processLeader() {
-	Debug(dInfo, "主循环进入 Leader", rf.me, G(rf.state))
+	Debug(dInfo, "主循环进入 Leader", rf.me)
 	select {
 	case states := <-rf.stateChanging:
 		{
 			rf.mu.Lock()
-			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, states.from, states.to)
 			if states.to == CANDIDATE {
 				//CANDIDATE是超时转换的！
-				Debug(dError, "状态转换无效！ %d -> %d", rf.me, G(rf.state), states.from, states.to)
+				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
 			} else {
 				//变成follower了
-				Debug(dLeader, "leader 被 S%d取代了！", rf.me, G(rf.state), rf.leaderId)
+				Debug(dLeader, "leader 被 S%d取代了！", rf.me, rf.leaderId)
 				rf.voteFor = -1
 			}
 			rf.mu.Unlock()
@@ -405,16 +423,16 @@ func (rf *Raft) processLeader() {
 
 func (rf *Raft) processFollower() {
 	//超时检查
-	Debug(dInfo, "主循环进入 follower", rf.me, G(rf.state))
+	Debug(dInfo, "主循环进入 follower", rf.me)
 	//等待状态转换或者超时
 	select {
 	case states := <-rf.stateChanging:
 		{
 			rf.mu.Lock()
-			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to) //用于debug
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, states.from, states.to) //用于debug
 			if states.to == CANDIDATE || states.to == LEADER {
 				//CANDIDATE是超时转换的！
-				Debug(dError, "状态转换无效！ %d -> %d", rf.me, G(rf.state), states.from, states.to)
+				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
 			}
 			rf.mu.Unlock()
 			break
@@ -422,10 +440,10 @@ func (rf *Raft) processFollower() {
 	case _ = <-time.After(rf.electionInterval):
 		{
 			rf.mu.Lock()
-			Debug(dVote, "校验超时 %d %d", rf.me, G(rf.state), GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
+			Debug(dVote, "校验超时 %d %d", rf.me, GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
 			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
 				//选举超时
-				Debug(dVote, "超时，进入candidate，并开始选举", rf.me, G(rf.state))
+				Debug(dVote, "超时，进入candidate，并开始选举", rf.me)
 				rf.state = CANDIDATE
 				go rf.broadcastVote() //todo 保证这个线程会超时退出
 			}
@@ -436,17 +454,17 @@ func (rf *Raft) processFollower() {
 }
 
 func (rf *Raft) processCandidate() {
-	Debug(dInfo, "主循环进入 Candidate", rf.me, G(rf.state))
+	Debug(dInfo, "主循环进入 Candidate", rf.me)
 	select {
 	case states := <-rf.stateChanging:
 		{
-			rf.mu.Lock()
-			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, G(rf.state), states.from, states.to)
+			//rf.mu.Lock() 不要！
+			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, states.from, states.to)
 			if states.to == LEADER {
 				//变成leader了
-				rf.initLeader()
+				rf.initLeader() //同步的
 			}
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 			break
 		}
 	case _ = <-time.After(rf.electionInterval):
@@ -454,14 +472,13 @@ func (rf *Raft) processCandidate() {
 			rf.mu.Lock()
 			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
 				//选举超时
-				Debug(dVote, "选举超时，candidate，再次开始选举", rf.me, G(rf.state))
+				Debug(dVote, "选举超时，candidate，再次开始选举", rf.me)
 				go rf.broadcastVote()
 			}
 			rf.mu.Unlock()
 			break
 		}
 	}
-	Debug(dInfo, "主循环退出！ Candidate", rf.me, G(rf.state))
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -514,7 +531,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.broadCastCondition = sync.NewCond(&rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
 	rf.waitGroup = sync.WaitGroup{}
-	rf.oneTurnTimeout = time.Duration(200) * time.Millisecond //比选举超时时间少一些
+	rf.rpcTimeout = time.Duration(100) * time.Millisecond //Rpc timeout要短一些
 	rf.stateChanging = make(chan *ChangedState)
 	for i := 0; i < rf.n; i++ {
 		rf.senderChannel[i] = make(chan *Task, ChannelSize)
@@ -526,7 +543,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//初始化选举超时时间
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	rf.electionInterval = time.Duration(r.Int31n(150)+250) * time.Millisecond
-	Debug(dInfo, "选举超时时间为 %s", rf.me, G(rf.state), rf.electionInterval.String())
+	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
