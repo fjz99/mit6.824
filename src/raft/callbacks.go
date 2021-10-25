@@ -2,7 +2,7 @@ package raft
 
 //go语言接口断言
 //只有rpc通信是并行的
-func voteFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	Debug(dVote, "S%d -> S%d RPC失败，不重试", rf.me, G(rf.state), rf.me, peerIndex)
@@ -15,7 +15,7 @@ func voteFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interf
 	return false
 }
 
-func voteSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
+func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//req := args.(*RequestVoteArgs)
@@ -38,16 +38,16 @@ func voteSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interf
 }
 
 //todo 心跳不足则leader降级
-func heartBeatFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
 	Debug(dLeader, "leader：对 S%d发送心跳失败！", rf.me, G(rf.state), peerIndex)
 	return false
 }
 
-func heartBeatSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
+func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	resp := reply.(*AppendEntriesReply)
-	Assert(resp.Success, "")
+	//Assert(resp.Success, "") //仅仅是rpc成功而已
 	if resp.Term > rf.term {
 		Debug(dLeader, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, G(rf.state), peerIndex, rf.me)
 		rf.increaseTerm(resp.Term)

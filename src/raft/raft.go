@@ -50,7 +50,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 			func(rf *Raft) {
 				Debug(dLog, prefix+"rpc请求超时%#v", rf.me, G(rf.state), peerIndex, task.args)
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
-				task.errorCallback(peerIndex, rf, task.args, task.reply)
+				task.RpcErrorCallback(peerIndex, rf, task.args, task.reply)
 			},
 			func() interface{} {
 				return endpoint.Call(task.rpcMethod, task.args, task.reply)
@@ -59,13 +59,13 @@ func (rf *Raft) messageSender(peerIndex int) {
 				ok := result.(bool)
 				if !ok {
 					Debug(dLog, prefix+"请求失败 %#v", rf.me, G(rf.state), peerIndex, task.args)
-					task.errorCallback(peerIndex, rf, task.args, task.reply)
-					//if again := task.errorCallback(peerIndex, rf, task.args, task.reply); again {
+					task.RpcErrorCallback(peerIndex, rf, task.args, task.reply)
+					//if again := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply); again {
 					//	Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
 					//}
 				} else {
 					Debug(dLog, prefix+"返回结果 %#v", rf.me, G(rf.state), peerIndex, task.reply)
-					task.successCallback(peerIndex, rf, task.args, task.reply)
+					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply)
 				}
 			})
 	}
@@ -100,7 +100,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //						continue
 //					}
 //					Debug(dLog, prefix+"请求失败 %#v", peerIndex, task.args)
-//					if again := task.errorCallback(peerIndex, rf, task.args, task.reply); again {
+//					if again := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply); again {
 //						Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
 //						goto tryAgain //reply需要初始化，所以如果重试的话，需要在callback中初始化
 //					}
@@ -110,7 +110,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //						continue
 //					}
 //					Debug(dLog, prefix+"返回结果 %#v", peerIndex, task.reply)
-//					task.successCallback(peerIndex, rf, task.args, task.reply)
+//					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply)
 //				}
 //				break
 //			}
@@ -153,8 +153,8 @@ func (rf *Raft) broadcastVote() bool {
 	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, G(rf.state), rf.term, *args)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
-			rf.senderChannel[i] <- &Task{voteFailureCallback,
-				voteSuccessCallback, args, &RequestVoteReply{}, "Raft.RequestVote"}
+			rf.senderChannel[i] <- &Task{voteRpcFailureCallback,
+				voteRpcSuccessCallback, args, &RequestVoteReply{}, "Raft.RequestVote"}
 			//注意reply每次都要创建新的才行
 		}
 	}
@@ -346,7 +346,7 @@ func (rf *Raft) broadCastHeartBeat() {
 		if i != rf.me {
 			//Debug(dLeader, "leader：S%d 对 S%d发送心跳", rf.me, i)
 			args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
-			rf.senderChannel[i] <- &Task{heartBeatFailureCallback, heartBeatSuccessCallback,
+			rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
 				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 		}
 	}

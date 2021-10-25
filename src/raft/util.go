@@ -121,7 +121,7 @@ func (rf *Raft) increaseTerm(newTerm int) {
 }
 
 func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
-	waitedFunction func() interface{}, successCallback func(rf *Raft, result interface{})) {
+	waitedFunction func() interface{}, timeWaitSuccessCallback func(rf *Raft, result interface{})) {
 	waitedChan := make(chan interface{})
 	wrapper := func() {
 		waitedChan <- waitedFunction()
@@ -131,7 +131,7 @@ func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
 	select {
 	case err := <-waitedChan:
 		{
-			successCallback(rf, err)
+			timeWaitSuccessCallback(rf, err)
 			break
 		}
 	case _ = <-time.After(timeout):
