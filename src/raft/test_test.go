@@ -87,7 +87,7 @@ func TestReElection2A(t *testing.T) {
 }
 
 func TestManyElections2A(t *testing.T) {
-	servers := 3
+	servers := 7
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
@@ -95,27 +95,28 @@ func TestManyElections2A(t *testing.T) {
 
 	cfg.checkOneLeader()
 
-	iters := 10
+	iters := 2
 	for ii := 1; ii < iters; ii++ {
 		// disconnect three nodes
 		i1 := rand.Int() % servers
-		//i2 := rand.Int() % servers
-		//i3 := rand.Int() % servers
+		i2 := rand.Int() % servers
+		i3 := rand.Int() % servers
+		fmt.Printf("fuck! [Turn %d] 断开的节点是 %d %d %d\n", ii, i1, i2, i3)
 		cfg.disconnect(i1)
-		//cfg.disconnect(i2)
-		//cfg.disconnect(i3)
+		cfg.disconnect(i2)
+		cfg.disconnect(i3)
 
 		// either the current leader should still be alive,
 		// or the remaining four should elect a new one.
 		cfg.checkOneLeader()
 
 		cfg.connect(i1)
-		//cfg.connect(i2)
-		//cfg.connect(i3)
+		cfg.connect(i2)
+		cfg.connect(i3)
 	}
-
+	fmt.Printf("fuck! [Turn %d] 结束！下面开始检查只有一个leader！\n", iters-1)
 	cfg.checkOneLeader()
-
+	fmt.Println("fuck! 检查只有一个leader！结束！PASS！！")
 	cfg.end()
 }
 

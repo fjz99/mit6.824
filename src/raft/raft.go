@@ -1,7 +1,8 @@
 package raft
 
-//todo 处理超时导致没有执行2个callback的问题
-//todo stateChange chan有大小
+//todo 重试投票请求的时候，是重新加到队列后面的，此时可以校验，如果队列有东西，说明一定是心跳，此时就不重试了
+//todo 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
+//fixme 超时了。。10s
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -110,17 +111,13 @@ func (rf *Raft) broadcastVote() bool {
 	rf.leaderId = -1
 	localTerm := rf.term //因为可能在这个轮次中，返回term修改
 	var args *RequestVoteArgs
-
-	lens := len(rf.log)
-	if lens == 0 {
-		args = &RequestVoteArgs{rf.term, rf.me, -1, -1}
-	} else {
-		lastLog := rf.log[lens-1]
-		args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
-	}
+	lastLog := rf.getLastLog()
+	args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
 	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, rf.term, *args)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
+			//避免多个任务访问args的竞争。。
+			args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
 			rf.senderChannel[i] <- &Task{voteRpcFailureCallback,
 				voteRpcSuccessCallback, args, &RequestVoteReply{}, "Raft.RequestVote"}
 			//注意reply每次都要创建新的才行
@@ -333,9 +330,13 @@ func (rf *Raft) broadCastHeartBeat() {
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			//Debug(dLeader, "对 S%d发送心跳", rf.me, i)
-			args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
-			rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
-				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+			if len(rf.senderChannel[i]) == 0 {
+				args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
+				rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
+					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+			} else {
+				Debug(dLeader, " -> S%d 发送队列中还有数据，长度为%d，所以不发送心跳", rf.me, i, len(rf.senderChannel[i]))
+			}
 		}
 	}
 }
