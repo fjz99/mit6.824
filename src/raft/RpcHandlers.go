@@ -11,14 +11,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return //!
 	}
 	if args.Term > rf.term {
-		rf.increaseTerm(args.Term)
+		rf.increaseTerm(args.Term, -1)
 		Debug(dTerm, "在RequestVote RPC中 接收到 S%d 的term = %d，修改", rf.me, args.CandidateId, args.Term)
 	}
+
 	lastLog := rf.getLastLog()
 	if rf.voteFor == -1 || rf.voteFor == args.CandidateId {
 		if args.LastLogTerm > lastLog.Term ||
 			(args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lastLog.Index) {
-			Debug(dVote, "决定投票给 S%d，因为args=%#v,lastLog=%#v", rf.me, args.CandidateId, args, lastLog)
+			Debug(dVote, "决定投票给 S%d，因为args=%#v,lastLog=%#v,我的term=%d，我的voteFor=%d",
+				rf.me, args.CandidateId, args, lastLog, rf.term, rf.voteFor)
 			rf.ResetTimer() //！！
 			rf.voteFor = args.CandidateId
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: true}
@@ -35,7 +37,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	Assert(args.LeaderId != rf.me, "")
-	Debug(dLog2, "接收到 leader:S%d 的AppendEntries rpc", rf.me, args.LeaderId)
+	Debug(dLog2, "接收到 leader:S%d 的AppendEntries rpc %#v", rf.me, args.LeaderId, *args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -49,18 +51,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if rf.state == LEADER {
 			Debug(dTerm, " 被 S%d 废黜", rf.me, args.LeaderId)
 		}
-		rf.increaseTerm(args.Term)
-		rf.leaderId = args.LeaderId //此时需要修改leaderId
+		rf.increaseTerm(args.Term, args.LeaderId) //此时需要修改leaderId
 	}
 	rf.ResetTimer() //!
 
 	//处理leader的改动
-	if rf.state != LEADER {
-		rf.leaderId = args.LeaderId
+	Assert(rf.state != LEADER, "发生脑裂") //如果term小，则丢弃；如果term大则降级为follower；如果term相同，还为leader，那就脑裂了
+	rf.leaderId = args.LeaderId
+	if rf.state == CANDIDATE {
 		rf.ChangeState(FOLLOWER)
-		//用于candidatie转换为follower
-		//偶然间发现的bug，事实上，可能有一个term相同的candidate，但是另一个选举成功了，所以此时收到了leaderId转换
 	}
+	//用于candidatie转换为follower
+	//偶然间发现的bug，事实上，可能有一个term相同的candidate，但是另一个选举成功了，所以此时收到了leaderId转换
 
 	if args.Log == nil || len(args.Log) == 0 {
 		//心跳

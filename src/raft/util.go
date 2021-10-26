@@ -32,12 +32,12 @@ const (
 
 var debugStart time.Time
 var debugVerbosity int
-var lock = sync.Mutex{}
+var logInitLock = sync.Mutex{}
 
 //提前手动调用
 func InitLog() {
-	lock.Lock()
-	defer lock.Unlock()
+	logInitLock.Lock()
+	defer logInitLock.Unlock()
 	debugVerbosity = getVerbosity()
 	debugStart = time.Now()
 
@@ -45,8 +45,8 @@ func InitLog() {
 }
 
 func Debug(topic logTopic, format string, a ...interface{}) {
-	lock.Lock()
-	defer lock.Unlock()
+	logInitLock.Lock()
+	defer logInitLock.Unlock()
 	if debugVerbosity >= 1 {
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
@@ -92,7 +92,20 @@ func (rf *Raft) getLastLog() LogEntry {
 
 func (rf *Raft) ChangeState(to State) {
 	if from := rf.state; from != to {
+		if to == LEADER {
+			rf.leaderId = rf.me
+		}
 		rf.state = to
+		//这个chan太容易死锁了
+
+		//rf.TimedWait(time.Duration(1)*time.Millisecond, func(rf *Raft) {
+		//	panic("chan 死锁")
+		//}, func() interface{} {
+		//	rf.stateChanging <- &ChangedState{from, to}
+		//	return nil
+		//}, func(rf *Raft, result interface{}) {
+		//
+		//})
 		rf.stateChanging <- &ChangedState{from, to}
 		Debug(dInfo, "状态转换 %d -> %d", rf.me, from, to)
 	}
@@ -110,10 +123,10 @@ func SetArrayValue(arr []int, v int) {
 	}
 }
 
-func (rf *Raft) increaseTerm(newTerm int) {
+func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Assert(rf.term < newTerm, "")
 	rf.voteFor = -1 //重置
-	rf.leaderId = -1
+	rf.leaderId = leaderId
 	rf.term = newTerm
 	rf.ChangeState(FOLLOWER)
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)

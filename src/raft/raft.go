@@ -1,7 +1,7 @@
 package raft
 
 //todo 处理超时导致没有执行2个callback的问题
-//todo leader选举成功后，死锁在channel的状态转换处
+//todo stateChange chan有大小
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -33,6 +33,8 @@ import (
 const ChannelSize = 10
 const HeartbeatInterval = time.Duration(100) * time.Millisecond
 const MaxElectionInterval = time.Duration(400) * time.Millisecond
+const CheckTimeoutInterval = time.Duration(50) * time.Millisecond //定时器超时校验时间间隔
+const EnableCheckThread = true                                    //启动周期检查
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -81,62 +83,10 @@ func (rf *Raft) messageSender(peerIndex int) {
 				}
 			})
 		if counter == 0 {
-			Debug(dLog, prefix+"对 S%d 发送请求完成！ %#v", rf.me, peerIndex, peerIndex, task.args)
+			Debug(dLog, prefix+"对 S%d 发送请求结束 %#v", rf.me, peerIndex, peerIndex, task.args)
 		}
 	}
 }
-
-//每个发送线程
-//peerIndex 即对应的在peer数组的偏移
-//func (rf *Raft) messageSender(peerIndex int) {
-//	Debug(dLog, "发送线程 %d 初始化成功", peerIndex)
-//	ch := rf.senderChannel[peerIndex]
-//	endpoint := rf.peers[peerIndex]
-//	prefix := "发送线程 %d "
-//	waitedChan := make(chan bool)
-//	wrapper := func(task *Task) {
-//		err := endpoint.Call(task.rpcMethod, task.args, task.reply)
-//		waitedChan <- err
-//	}
-//
-//	for !rf.killed() {
-//		task := <-ch
-//		t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
-//		//这种超时是同步超时
-//	tryAgain:
-//		go wrapper(task)
-//		Debug(dLog, prefix+"S%d 对 S%d 发送vote请求 %#v", peerIndex, rf.me, peerIndex, *task)
-//		select {
-//		case err := <-waitedChan:
-//			{
-//				if err {
-//					if GetNow()-t > rf.rpcTimeout.Microseconds() {
-//						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
-//						continue
-//					}
-//					Debug(dLog, prefix+"请求失败 %#v", peerIndex, task.args)
-//					if again := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply); again {
-//						Debug(dLog, prefix+"请求重试 %#v", peerIndex, task.args)
-//						goto tryAgain //reply需要初始化，所以如果重试的话，需要在callback中初始化
-//					}
-//				} else {
-//					if GetNow()-t > rf.rpcTimeout.Microseconds() {
-//						Debug(dLog, prefix+"请求超时 %#v", peerIndex, task.args)
-//						continue
-//					}
-//					Debug(dLog, prefix+"返回结果 %#v", peerIndex, task.reply)
-//					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply)
-//				}
-//				break
-//			}
-//		case _ = <-time.After(rf.rpcTimeout):
-//			{
-//				Debug(dLog, prefix+"rpc请求超时", peerIndex)
-//				break
-//			}
-//		}
-//	}
-//}
 
 //广播，然后收集等待过半返回，指定超时时间
 //日志复制的一种实现就是，区分传播轮次，每次广播的目标都是复制到leader的最新id，只要接收到过半就返回，此时可能还有发送线程在补日志，但是没事，只会影响下一轮次
@@ -146,9 +96,13 @@ func (rf *Raft) messageSender(peerIndex int) {
 //Candidate
 func (rf *Raft) broadcastVote() bool {
 	Debug(dVote, "调用 broadcastVote", rf.me)
-	rf.mu.Lock() //通过获得全局锁来控制广播轮次，否则会很混乱?
+	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.state = CANDIDATE
+	//logA-1.log 校验状态
+	if rf.state != CANDIDATE {
+		Debug(dVote, "进入broadcastVote临界区后，发现状态发生改变为 %d ，所以终止选举", rf.me, rf.state)
+		return true
+	}
 	rf.term++
 	rf.voteFor = rf.me
 	rf.doneRPCs = 0
@@ -175,14 +129,11 @@ func (rf *Raft) broadcastVote() bool {
 	//rf.waitGroup.Add(rf.n / 2) //算上自己就是过半了！
 	//rf.mu.Unlock()             //!不会自动释放锁
 	//rf.waitGroup.Wait()
-	for true {
+	for !(rf.agreeCounter >= rf.n/2+1 || rf.doneRPCs == rf.n-1) {
 		rf.broadCastCondition.Wait()
 		//重新获得了锁
 		//等待所有rpc结束，非常影响性能
 		Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, rf.agreeCounter, rf.doneRPCs)
-		if rf.agreeCounter >= rf.n/2+1 || rf.doneRPCs == rf.n-1 {
-			break
-		}
 	}
 
 	//其他人变成leader
@@ -190,7 +141,7 @@ func (rf *Raft) broadcastVote() bool {
 	//defer rf.mu.Unlock()
 	if rf.leaderId != -1 {
 		//心跳handler中处理了
-		Debug(dVote, "%d轮次选举完成，已发现新的leader S%d", rf.me, rf.leaderId)
+		Debug(dVote, "%d 轮次选举完成，已发现新的leader S%d", rf.me, rf.term, rf.leaderId)
 		return true
 	}
 	if localTerm != rf.term {
@@ -202,6 +153,7 @@ func (rf *Raft) broadcastVote() bool {
 		Debug(dVote, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
 		//主循环处理任何状态变更
 		rf.ChangeState(LEADER)
+		rf.leaderId = rf.me
 		return true
 	} else {
 		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, localTerm, rf.agreeCounter)
@@ -214,7 +166,27 @@ func (rf *Raft) broadcastVote() bool {
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	Debug(dTest, "GetState 被调用！ leader = %d, state = %d", rf.me, rf.leaderId, rf.state)
 	return rf.term, rf.state == LEADER
+}
+
+func (rf *Raft) check() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	switch rf.state {
+	case LEADER:
+		Assert(rf.leaderId == rf.me, "")
+		Assert(rf.voteFor == rf.me, "")
+		break
+	case FOLLOWER:
+		Assert(rf.leaderId != rf.me, "")
+		break
+	case CANDIDATE:
+		Assert(rf.voteFor == rf.me, "")
+		Assert(rf.leaderId == -1, "")
+		break
+	}
+	time.Sleep(time.Duration(2) * time.Second)
 }
 
 //
@@ -337,7 +309,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // the tester doesn't halt goroutines created by Raft after each test,
 // but it does call the Kill() method. your code can use killed() to
 // check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
+// need for a logInitLock.
 //
 // the issue is that long-running goroutines use memory and may chew
 // up CPU time, perhaps causing later tests to fail and generating
@@ -355,6 +327,8 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) broadCastHeartBeat() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	Debug(dLeader, "广播心跳", rf.me)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
@@ -400,15 +374,14 @@ func (rf *Raft) processLeader() {
 	select {
 	case states := <-rf.stateChanging:
 		{
-			rf.mu.Lock()
+			rf.mu.Lock() //这里似乎有死锁的可能，比如一个获得锁的线程企图写chan，当前线程却正好阻塞在这里。。，所以chan设置为有缓冲区的
 			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, states.from, states.to)
 			if states.to == CANDIDATE {
 				//CANDIDATE是超时转换的！
 				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
 			} else {
 				//变成follower了
-				Debug(dLeader, "leader 被 S%d取代了！", rf.me, rf.leaderId)
-				rf.voteFor = -1
+				Debug(dLeader, "leader 被 S%d term=%d 降级了！", rf.me, rf.leaderId, rf.term)
 			}
 			rf.mu.Unlock()
 			break
@@ -440,12 +413,13 @@ func (rf *Raft) processFollower() {
 	case _ = <-time.After(rf.electionInterval):
 		{
 			rf.mu.Lock()
-			Debug(dVote, "校验超时 %d %d", rf.me, GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
-			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
+			Debug(dTrace, "校验超时 %d %d", rf.me, GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
+			if GetNow()-rf.lastAccessTime >= rf.electionInterval.Milliseconds() {
 				//选举超时
-				Debug(dVote, "超时，进入candidate，并开始选举", rf.me)
+				Debug(dVote, " %d > %d 超时，进入candidate，并开始选举", rf.me, GetNow()-rf.lastAccessTime, rf.electionInterval.Milliseconds())
 				rf.state = CANDIDATE
-				go rf.broadcastVote() //todo 保证这个线程会超时退出
+				rf.ResetTimer()
+				go rf.broadcastVote()
 			}
 			rf.mu.Unlock()
 			break
@@ -470,9 +444,10 @@ func (rf *Raft) processCandidate() {
 	case _ = <-time.After(rf.electionInterval):
 		{
 			rf.mu.Lock()
-			if GetNow()-rf.lastAccessTime > rf.electionInterval.Milliseconds() {
+			if GetNow()-rf.lastAccessTime >= rf.electionInterval.Milliseconds() {
 				//选举超时
 				Debug(dVote, "选举超时，candidate，再次开始选举", rf.me)
+				rf.ResetTimer()
 				go rf.broadcastVote()
 			}
 			rf.mu.Unlock()
@@ -525,14 +500,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.n = len(peers)
 	rf.applyCh = applyCh
+	//选举相关
 	rf.state = FOLLOWER
+	rf.leaderId = -1
+	rf.voteFor = -1
+	rf.term = 0
+
+	//commit
 	rf.commitIndex = -1
 	rf.lastApplied = -1
+
+	//通信
 	rf.broadCastCondition = sync.NewCond(&rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
+	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}
-	rf.rpcTimeout = time.Duration(100) * time.Millisecond //Rpc timeout要短一些
+	rf.rpcTimeout = time.Duration(80) * time.Millisecond //Rpc timeout要短一些
 	rf.stateChanging = make(chan *ChangedState)
+	rf.ResetTimer()
+
 	for i := 0; i < rf.n; i++ {
 		rf.senderChannel[i] = make(chan *Task, ChannelSize)
 		if i != me {
@@ -540,9 +526,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		}
 	}
 
-	//初始化选举超时时间
+	//初始化选举超时时间,避免重复，增加间隔
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rf.electionInterval = time.Duration(r.Int31n(150)+250) * time.Millisecond
+	rf.electionInterval = time.Duration(r.Int31n(251)+250) * time.Millisecond
 	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
 	// initialize from state persisted before a crash
@@ -550,6 +536,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
+	if EnableCheckThread {
+		go rf.check()
+	}
 
 	return rf
 }

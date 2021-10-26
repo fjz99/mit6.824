@@ -10,15 +10,19 @@ cd ../src/raft
 # Note: because the socketID is based on the current userID,
 # ./test-mr.sh cannot be run in parallel
 runs=$1
-chmod +x testLab2_many.sh
+chmod +x ../../.run/testLab2.sh
+rm -rf failedTests
 mkdir failedTests
 
 for i in $(seq 1 "$runs"); do
-    timeout -k 2s 10s ./test-mr.sh &
+    timeout -k 2s 10s ../../.run/testLab2.sh &
     pid=$!
     if ! wait $pid; then
         echo '***' FAILED TESTS IN TRIAL "$i"
         cp e.log failedTests/e-"$i".log
+    else
+        echo '***' SUCCESS IN TRIAL "$i"
     fi
 done
-echo '***' PASSED ALL $i TESTING TRIALS
+
+echo '*** DONE ***'

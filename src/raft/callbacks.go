@@ -8,7 +8,7 @@ func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	//req := args.(*RequestVoteArgs)
 	//resp := reply.(*RequestVoteReply)
 	//*resp = RequestVoteReply{}
-	if *counter <= 1 {
+	if *counter <= 2 {
 		Debug(dVote, "S%d -> S%d 选举 RPC失败，重试!", rf.me, rf.me, peerIndex)
 		return true
 	} else {
@@ -29,14 +29,14 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	if resp.Term > rf.term {
 		//转为follower
 		Debug(dVote, "接收到S%d返回，但是term大于当前服务器S%d", rf.me, peerIndex, rf.me)
-		rf.increaseTerm(resp.Term)
+		rf.increaseTerm(resp.Term, -1)
 	}
 	//验证投票同意与否
 	if resp.VoteGranted {
 		rf.agreeCounter++
 		Debug(dVote, "接收到S%d返回同意投票", rf.me, peerIndex)
 	} else {
-		Debug(dVote, "接收到S%d返回拒绝！！投票", rf.me, peerIndex, rf.me)
+		Debug(dVote, "接收到S%d返回拒绝投票！！", rf.me, peerIndex)
 	}
 	//rf.waitGroup.Done()
 	rf.broadCastCondition.Broadcast()
@@ -45,7 +45,7 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 //todo 心跳不足则leader降级
 func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc失败！", rf.me, peerIndex)
-	//if *counter <= 0 { //一轮rpc 100 ms超时
+	//if *counter <= 1 { //一轮rpc 50 ms超时
 	//	return true
 	//} else {
 	//	return false
@@ -59,9 +59,8 @@ func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, repl
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	resp := reply.(*AppendEntriesReply)
-	//Assert(resp.Success, "") //仅仅是rpc成功而已
 	if resp.Term > rf.term {
 		Debug(dLeader, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
-		rf.increaseTerm(resp.Term)
+		rf.increaseTerm(resp.Term, -1)
 	}
 }
