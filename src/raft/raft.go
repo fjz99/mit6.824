@@ -32,9 +32,11 @@ import (
 )
 
 const ChannelSize = 10
-const HeartbeatInterval = time.Duration(100) * time.Millisecond
+const HeartbeatInterval = time.Duration(200) * time.Millisecond
 const MaxElectionInterval = time.Duration(400) * time.Millisecond
-const EnableCheckThread = true //启动周期检查
+const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
+const RpcTimeout = time.Duration(200) * time.Millisecond
+const MinElectionTimeoutInterval = 250
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -62,6 +64,8 @@ func (rf *Raft) messageSender(peerIndex int) {
 				}
 			},
 			func() interface{} {
+				//fixme 这里会data race，但是没法加锁，因为这个调用很慢
+				//但是发生概率很低
 				return endpoint.Call(task.rpcMethod, task.args, task.reply)
 			},
 			func(rf *Raft, result interface{}) {
@@ -515,7 +519,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.senderChannel = make([]chan *Task, rf.n)
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}
-	rf.rpcTimeout = time.Duration(80) * time.Millisecond //Rpc timeout要短一些
+	rf.rpcTimeout = RpcTimeout //Rpc timeout要短一些
 	rf.stateChanging = make(chan *ChangedState)
 	rf.ResetTimer()
 
@@ -528,7 +532,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//初始化选举超时时间,避免重复，增加间隔
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rf.electionInterval = time.Duration(r.Int31n(151)+250) * time.Millisecond
+	rf.electionInterval = time.Duration(r.Int31n(151)+MinElectionTimeoutInterval) * time.Millisecond
 	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
 	// initialize from state persisted before a crash

@@ -40,3 +40,7 @@ which will result in you granting the vote!
 27. 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
 28. 在给多个线程分发任务的时候，必须保证每个线程获得的任务也是内存重分配的。。
 29. 存在超时问题，时限为10s，修改选举超时时间！
+30. 最终结果为，选举超时200-350，rpc 80超时，均不重发，一次超时时间内，发一次心跳，一次投票请求就行！
+31. Remember, however, that leader election may require multiple rounds in case of a split vote 
+(which can happen if packets are lost or if candidates unluckily choose the same random backoff times). 
+即，guide说了，不用重试投票请求！，只需要多轮投票就行！
