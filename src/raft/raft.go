@@ -1,8 +1,8 @@
 package raft
 
-//todo 重试投票请求的时候，是重新加到队列后面的，此时可以校验，如果队列有东西，说明一定是心跳，此时就不重试了
-//todo 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
 //fixme 超时了。。10s
+//todo 心跳不足则leader降级
+//todo 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -34,8 +34,7 @@ import (
 const ChannelSize = 10
 const HeartbeatInterval = time.Duration(100) * time.Millisecond
 const MaxElectionInterval = time.Duration(400) * time.Millisecond
-const CheckTimeoutInterval = time.Duration(50) * time.Millisecond //定时器超时校验时间间隔
-const EnableCheckThread = true                                    //启动周期检查
+const EnableCheckThread = true //启动周期检查
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -529,7 +528,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//初始化选举超时时间,避免重复，增加间隔
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rf.electionInterval = time.Duration(r.Int31n(251)+250) * time.Millisecond
+	rf.electionInterval = time.Duration(r.Int31n(151)+250) * time.Millisecond
 	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
 	// initialize from state persisted before a crash

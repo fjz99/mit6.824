@@ -5,13 +5,14 @@ package raft
 func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//req := args.(*RequestVoteArgs)
-	//resp := reply.(*RequestVoteReply)
-	//*resp = RequestVoteReply{}
+	//req := args.(*RequestVoteArgs
 
 	//因为重试是重新加到队列里。。
 	if *counter <= 2 && rf.state == CANDIDATE {
 		Debug(dVote, "S%d -> S%d 选举 RPC失败，重试!", rf.me, rf.me, peerIndex)
+		resp := reply.(*RequestVoteReply)
+		*resp = RequestVoteReply{}
+		//重试必须修正reply
 		return true
 	} else {
 		Debug(dVote, "S%d -> S%d 选举 RPC失败，不重试 state=%d", rf.me, rf.me, peerIndex, rf.state)
@@ -44,7 +45,6 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	rf.broadCastCondition.Broadcast()
 }
 
-//todo 心跳不足则leader降级
 func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc失败！", rf.me, peerIndex)
 	//if *counter <= 1 { //一轮rpc 50 ms超时
