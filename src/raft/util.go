@@ -90,6 +90,46 @@ func (rf *Raft) getLastLog() LogEntry {
 	}
 }
 
+func (rf *Raft) getLastLastLog() LogEntry {
+	lens := len(rf.log)
+	if lens <= 1 {
+		return LogEntry{Term: -1, Index: -1, Command: nil}
+	} else {
+		return rf.log[lens-2]
+	}
+}
+
+//获得某个索引位置的上一个log，位置必须是有效的
+func (rf *Raft) getLastLogOf(index int) LogEntry {
+	Assert(index >= 0 && index < len(rf.log), "")
+	if index == 0 {
+		return LogEntry{Term: -1, Index: -1, Command: nil}
+	} else {
+		return rf.log[index-1]
+	}
+}
+
+func (rf *Raft) ApplyMsg2B(command interface{}, index int) {
+	rf.applyCh <- ApplyMsg{CommandValid: true, Command: command, CommandIndex: index}
+}
+
+func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
+	c := Min(LeaderCommit, len(rf.log)-1) //follower就不用唤醒cond了
+	//注意空entry就不用apply了。。
+	for i := rf.commitIndex + 1; i <= c; i++ {
+		if rf.log[i].Command != nil {
+			Debug(dCommit, "发送测试数据 command=%#v index=%d", rf.me, rf.log[i], i)
+			rf.ApplyMsg2B(rf.log[i].Command, i)
+		}
+	}
+
+	//Assert(c >= rf.commitIndex, "") //leader的commitId可能比我（follower）小！，见figure8，和bugfix9
+	if c > rf.commitIndex {
+		rf.commitIndex = c
+		Debug(dCommit, "更新commitId为 %d", rf.me, rf.commitIndex)
+	}
+}
+
 func (rf *Raft) ChangeState(to State) {
 	if from := rf.state; from != to {
 		if to == LEADER {
@@ -97,15 +137,6 @@ func (rf *Raft) ChangeState(to State) {
 		}
 		rf.state = to
 		//这个chan太容易死锁了
-
-		//rf.TimedWait(time.Duration(1)*time.Millisecond, func(rf *Raft) {
-		//	panic("chan 死锁")
-		//}, func() interface{} {
-		//	rf.stateChanging <- &ChangedState{from, to}
-		//	return nil
-		//}, func(rf *Raft, result interface{}) {
-		//
-		//})
 		rf.stateChanging <- &ChangedState{from, to}
 		Debug(dInfo, "状态转换 %d -> %d", rf.me, from, to)
 	}
@@ -132,6 +163,86 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
 
+func (rf *Raft) LeaderUpdateCommitIndex() {
+	count := 0
+	minC := 0x3f3f3f3f
+	Assert(rf.me == rf.leaderId, "")
+	for pos, i := range rf.matchIndex {
+		if pos != rf.me && i > rf.commitIndex {
+			count++
+			minC = Min(minC, i)
+		}
+	}
+	if count >= rf.n/2 { //因为自己和自己的matchIndex无视
+		rf.commitIndex = minC
+		rf.CommitIndexCondition.Broadcast()
+		Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%#v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
+	}
+}
+
+//生成新任务,策略是根据lastSuccess的情况
+//如果上次成功了的话，就可以多弄一些，因为已经清楚冲突了,batch需要合适，太大了的话，丢包损失大
+//如果上次失败了的话，就以回退为主，log取1个
+//todo unit test
+func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bool) {
+	nextIndex := rf.nextIndex[peerIndex]
+	Assert(nextIndex <= len(rf.log), "")
+
+	if nextIndex == len(rf.log) {
+		Debug(dCommit, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
+		return
+	}
+
+	n := 10 //10个log一个batch
+	lastLog := rf.getLastLogOf(nextIndex)
+	args := &AppendEntriesArgs{}
+
+	if lastSuccess {
+		//归零
+		rf.backwardBase[peerIndex] = 1
+
+		var arr []LogEntry
+		if len(rf.log)-nextIndex >= n {
+			arr = Copy(arr, rf.log[nextIndex:nextIndex+n])
+		} else {
+			arr = Copy(arr, rf.log[nextIndex:])
+		}
+		args = &AppendEntriesArgs{rf.term, arr, lastLog.Index,
+			lastLog.Term, rf.commitIndex, rf.me}
+		Assert(len(arr) > 0, "")
+	} else {
+		args = &AppendEntriesArgs{rf.term, []LogEntry{rf.log[nextIndex]}, lastLog.Index,
+			lastLog.Term, rf.commitIndex, rf.me}
+	}
+
+	//
+	if clearChannel {
+		for len(rf.senderChannel[peerIndex]) > 0 {
+			_ = <-rf.senderChannel[peerIndex]
+		}
+		Debug(dCommit, "生成 S%d 新的任务前，先清除队列中的任务", rf.me, peerIndex)
+	}
+	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+		args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+	Debug(dCommit, "生成 S%d 新的任务 %#v", rf.me, peerIndex, *args)
+}
+
+//根据match进行回退,
+//目前使用指数退让法1 2 4 8
+func (rf *Raft) backward(peerIndex int) {
+	//回退之前的nextIndex应该大于matchIndex+1，因为matchIndex一定匹配。。因为开始时0，-1所以大于好一点
+	Assert(rf.nextIndex[peerIndex] > rf.matchIndex[peerIndex], "")
+
+	rf.nextIndex[peerIndex] -= rf.backwardBase[peerIndex]
+	if rf.nextIndex[peerIndex] <= rf.matchIndex[peerIndex] {
+		Debug(dCommit, "WARN:S%d next index %d退让的时候，退让的比matchIndex %d 还小了",
+			rf.me, peerIndex, rf.nextIndex[peerIndex], rf.matchIndex[peerIndex])
+		rf.nextIndex[peerIndex] = rf.matchIndex[peerIndex] + 1
+	}
+
+	rf.backwardBase[peerIndex] *= 2
+}
+
 func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
 	waitedFunction func() interface{}, timeWaitSuccessCallback func(rf *Raft, result interface{})) {
 	waitedChan := make(chan interface{})
@@ -152,4 +263,29 @@ func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
 			break
 		}
 	}
+}
+
+func Min(a int, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func Max(a int, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
+//完全覆盖版本的copy
+func Copy(dst, src []LogEntry) []LogEntry {
+	Assert(len(dst) == 0, "")
+	for _, i := range src {
+		dst = append(dst, i)
+	}
+	return dst
 }

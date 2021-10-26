@@ -1,8 +1,11 @@
 package raft
 
-//fixme 超时了。。10s
-//todo 心跳不足则leader降级
+//todo 日志提交的时候，刚被选举为leader的节点会发送空entry，此时可能会和第一轮心跳冲突，不过无所谓
 //todo 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
+//todo batchsize选择
+//todo basicAgreement的测试，可能遇到还没来得及发送空entry就有一个agreement来了的情况。。此时index就不对了；见e-116.log
+// 解决办法，判断前驱，必须是term=现在，否则就在cond等待commit,为了保证后续任务的有序性，需要添加一个缓冲队列。。
+//todo 改变initLeader的位置，先初始化再状态转换
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -37,11 +40,12 @@ const MaxElectionInterval = time.Duration(400) * time.Millisecond
 const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
 const RpcTimeout = time.Duration(200) * time.Millisecond
 const MinElectionTimeoutInterval = 250
+const CommitAgreeTimeout = time.Duration(200) * time.Millisecond //一次日志添加的超时时间
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
 func (rf *Raft) messageSender(peerIndex int) {
-	Debug(dLog, "发送线程 %d 初始化成功", rf.me, peerIndex)
+	//Debug(dLog, "发送线程 %d 初始化成功", rf.me, peerIndex)
 	ch := rf.senderChannel[peerIndex]
 	endpoint := rf.peers[peerIndex]
 	prefix := "发送线程 %d "
@@ -82,7 +86,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 					}
 				} else {
 					Debug(dLog, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
-					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply)
+					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply, task)
 					counter = 0
 				}
 			})
@@ -99,7 +103,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 //返回值为选举结束
 //Candidate
 func (rf *Raft) broadcastVote() bool {
-	Debug(dVote, "调用 broadcastVote", rf.me)
+	//Debug(dVote, "调用 broadcastVote", rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//logA-1.log 校验状态
@@ -126,19 +130,13 @@ func (rf *Raft) broadcastVote() bool {
 			//注意reply每次都要创建新的才行
 		}
 	}
-	//rf.waitGroup.Add(rf.n / 2) //算上自己就是过半了！
-	//rf.mu.Unlock()             //!不会自动释放锁
-	//rf.waitGroup.Wait()
 	for !(rf.agreeCounter >= rf.n/2+1 || rf.doneRPCs == rf.n-1) {
 		rf.broadCastCondition.Wait()
 		//重新获得了锁
-		//等待所有rpc结束，非常影响性能
-		Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, rf.agreeCounter, rf.doneRPCs)
+		//Debug(dTrace, "broadCastCondition wait被唤醒，%d，%d", rf.me, rf.agreeCounter, rf.doneRPCs)
 	}
 
 	//其他人变成leader
-	//rf.mu.Lock()
-	//defer rf.mu.Unlock()
 	if rf.leaderId != -1 {
 		//心跳handler中处理了
 		Debug(dVote, "%d 轮次选举完成，已发现新的leader S%d", rf.me, rf.term, rf.leaderId)
@@ -248,40 +246,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 //
-// example code to send a RequestVote RPC to a server.
-// server is the Index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
-}
-
-//
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next Command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -296,13 +260,65 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	Debug(dCommit, "state=%d 接收到日志提交请求： %#v", rf.me, rf.state, command)
+	//Assert(rf.state == LEADER, "") //只有leader才能提交
 
-	// Your code here (2B).
+	if rf.state != LEADER {
+		Debug(dCommit, "我不是leader，忽略日志提交请求： %#v", rf.me, command)
+		defer rf.mu.Unlock() //!
+		return rf.commitIndex, rf.term, false
+	}
 
-	return index, term, isLeader
+	//添加到本地
+	rf.log = append(rf.log, LogEntry{Term: rf.term, Index: len(rf.log), Command: command})
+	thisIndex := len(rf.log) - 1
+
+	rf.doneRPCs = 0
+	rf.agreeCounter = 1
+
+	//开始广播
+	Debug(dCommit, "广播日志 %#v", rf.me, rf.getLastLog())
+	for i := 0; i < rf.n; i++ {
+		if i != rf.me {
+			Debug(dCommit, "对 S%d发送日志", rf.me, i)
+			if len(rf.senderChannel[i]) > 0 {
+				Debug(dCommit, "WARN:企图对S%d发送日志的时候，队列中还有别的内容等待发送len=%d", rf.me, i, len(rf.senderChannel[i]))
+			}
+			prev := rf.getLastLastLog()
+			args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prev.Index,
+				prev.Term, rf.commitIndex, rf.me}
+			rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+		}
+	}
+	rf.mu.Unlock()
+
+	rf.TimedWait(CommitAgreeTimeout, func(rf *Raft) {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		Debug(dCommit, "日志index=%d提交超时,失败！此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
+	}, func() interface{} {
+		rf.mu.Lock()
+		defer rf.mu.Unlock() //todo 可能死锁
+		for rf.commitIndex < thisIndex {
+			rf.CommitIndexCondition.Wait()
+			Debug(dCommit, "接收到commitId修改的广播，check", rf.me)
+			Debug(dCommit, "我要的index=%d但是commitId=%d", rf.me, thisIndex, rf.commitIndex)
+		}
+		return rf.commitIndex
+	}, func(rf *Raft, result interface{}) {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		Debug(dCommit, "日志index=%d提交成功，此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
+		//用于测试
+		Debug(dCommit, "发送测试数据 command=%#v index=%d", rf.me, command, thisIndex)
+		rf.ApplyMsg2B(command, thisIndex)
+	})
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.commitIndex, rf.term, rf.state == LEADER
 }
 
 //
@@ -318,7 +334,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 }
 
 func (rf *Raft) killed() bool {
@@ -344,7 +359,6 @@ func (rf *Raft) broadCastHeartBeat() {
 	}
 }
 
-//初始化一个新的leader
 func (rf *Raft) initLeader() {
 	Debug(dLeader, "开始leader初始化!", rf.me)
 	//细粒度锁
@@ -352,22 +366,16 @@ func (rf *Raft) initLeader() {
 	rf.leaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
+	rf.backwardBase = make([]int, rf.n)
 	SetArrayValue(rf.nextIndex, len(rf.log))
 	SetArrayValue(rf.matchIndex, -1)
+	SetArrayValue(rf.backwardBase, 1)
 	rf.mu.Unlock()
 
 	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
 	//todo 心跳检测等待结果，决定是否主动降级
-	rf.broadCastHeartBeat()
-
-	//t := GetNow()
-	//for true {
-	//	if GetNow()-t > MaxElectionInterval.Milliseconds() {
-	//		break
-	//	}
-	//	rf.broadCastHeartBeat()
-	//	time.Sleep(time.Duration(50) * time.Millisecond)
-	//}
+	//rf.broadCastHeartBeat()
+	rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
 
 	Debug(dLeader, "init leader done!", rf.me)
 }
@@ -460,8 +468,6 @@ func (rf *Raft) processCandidate() {
 	}
 }
 
-// The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
 // 心跳线程是真正的主线程
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
@@ -516,6 +522,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//通信
 	rf.broadCastCondition = sync.NewCond(&rf.mu)
+	rf.CommitIndexCondition = sync.NewCond(&rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}
@@ -538,7 +545,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
 	go rf.ticker()
 
 	if EnableCheckThread {

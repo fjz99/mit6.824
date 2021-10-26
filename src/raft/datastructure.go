@@ -19,7 +19,6 @@ const (
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
 	Term         int
 	CandidateId  int
 	LastLogIndex int
@@ -31,7 +30,6 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	// Your data here (2A).
 	Term        int
 	VoteGranted bool
 }
@@ -62,18 +60,19 @@ type Task struct {
 	//返回值为是否重试 参数都是指针，reply需要初始化，所以如果重试的话，需要在callback中初始化
 	//这个callback会在超时或者rpc返回false时调用
 
-	RpcSuccessCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{})
+	RpcSuccessCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task)
 	args               interface{} //发送的内容
 	reply              interface{}
 	rpcMethod          string //rpc 方法名
 }
 
 type Raft struct {
-	mu                 sync.Mutex // Lock to protect shared access to this peer's state
-	broadCastCondition *sync.Cond
-	agreeCounter       int //用于统计过半机制
-	doneRPCs           int //统计完成了多少rpc
-	waitGroup          sync.WaitGroup
+	mu                   sync.Mutex // Lock to protect shared access to this peer's state
+	broadCastCondition   *sync.Cond
+	CommitIndexCondition *sync.Cond //监听commitId的变化
+	agreeCounter         int        //用于统计过半机制
+	doneRPCs             int        //统计完成了多少rpc
+	waitGroup            sync.WaitGroup
 
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
@@ -93,6 +92,7 @@ type Raft struct {
 	lastApplied   int          //最后被应用到状态机的id
 	nextIndex     []int        //leader使用初始化为 最大日志index的下一个id，用于回溯
 	matchIndex    []int        //leader使用初始化为 -1
+	backwardBase  []int        //用于指数退让
 	senderChannel []chan *Task //为了并行发送心跳和日志提交，一个一个提交的话，是串行，非常慢，还存在超时重试的问题！在
 
 	lastAccessTime   int64 //用于心跳检测

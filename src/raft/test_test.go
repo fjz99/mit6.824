@@ -19,6 +19,23 @@ import "sync"
 // (much more than the paper's range of timeouts).
 const RaftElectionTimeout = 1000 * time.Millisecond
 
+//my tests
+
+func TestGenerateNewTask(t *testing.T) {
+	rf := &Raft{}
+	rf.me = 0
+	rf.n = 3
+	rf.nextIndex = make([]int, 3)
+	rf.nextIndex[1] = 2
+	rf.matchIndex = make([]int, 3)
+	rf.backwardBase = make([]int, 3)
+	rf.matchIndex[1] = 1
+	rf.log = []LogEntry{{}, {}, {}, {}, {}, {}, {}}
+	rf.generateNewTask(1, true, false)
+}
+
+//their tests
+
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)

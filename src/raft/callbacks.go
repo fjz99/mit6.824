@@ -1,6 +1,5 @@
 package raft
 
-//go语言接口断言
 //只有rpc通信是并行的
 func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
 	rf.mu.Lock()
@@ -14,7 +13,7 @@ func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	return false
 }
 
-func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
+func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//req := args.(*RequestVoteArgs)
@@ -42,7 +41,7 @@ func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, repl
 }
 
 //这里，假如选为leader之后，在init的地方for循环多次发送的话，因为外部加的是for循环整体的锁，而回调函数需要锁，所以阻塞了所有的回调函数，导致发送队列阻塞
-func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
+func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc成功！", rf.me, peerIndex)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -51,4 +50,51 @@ func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, repl
 		Debug(dLeader, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
 		rf.increaseTerm(resp.Term, -1)
 	}
+}
+
+func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
+	Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试", rf.me, peerIndex)
+	return true
+}
+
+func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
+	Debug(dCommit, "leader：对 S%d发送日志log rpc成功！", rf.me, peerIndex)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	resp := reply.(*AppendEntriesReply)
+	req := args.(*AppendEntriesArgs)
+	if resp.Term > rf.term {
+		Debug(dCommit, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
+		rf.increaseTerm(resp.Term, -1)
+	}
+
+	if resp.Success {
+		Assert(req.Log != nil && len(req.Log) > 0, "") //这个是心跳，按理说不应该执行这个回调
+
+		//matchIndex check
+		reqMaxIndex := req.Log[len(req.Log)-1].Index
+		//因为完全包含的话，日志也算复制成功。。
+		//修改matchIndex,matchIndex可以在不提交的时候修改
+		if rf.matchIndex[peerIndex] < reqMaxIndex {
+			rf.matchIndex[peerIndex] = reqMaxIndex
+			rf.LeaderUpdateCommitIndex()
+		}
+
+		//nextIndex check
+		rf.nextIndex[peerIndex] = reqMaxIndex + 1
+		//这个不要最大值。。因为初始化的时候是乐观估计，是leader的log最大值
+		Debug(dCommit, "接收到S%d返回，日志复制成功,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
+			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
+		rf.generateNewTask(peerIndex, true, true)
+		//归零
+		rf.backwardBase[peerIndex] = 1
+	} else {
+		Debug(dCommit, "接收到S%d返回，日志复制失败,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
+			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
+
+		//fixme 根据match进行回退
+		rf.backward(peerIndex)
+		rf.generateNewTask(peerIndex, false, true)
+	}
+
 }
