@@ -223,8 +223,10 @@ func TestFailAgree2B(t *testing.T) {
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
+	fmt.Println("fuck! test ", 106)
 	cfg.one(106, servers, true)
 	time.Sleep(RaftElectionTimeout)
+	fmt.Println("fuck! test ", 107)
 	cfg.one(107, servers, true)
 
 	cfg.end()

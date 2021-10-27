@@ -91,12 +91,12 @@ func (rf *Raft) getLastLog() LogEntry {
 	}
 }
 
-func (rf *Raft) getLastLastLog() LogEntry {
+func (rf *Raft) getLastLastLog() (LogEntry, int) {
 	lens := len(rf.log)
 	if lens <= 1 {
-		return LogEntry{Term: -1, Index: -1, Command: nil}
+		return LogEntry{Term: -1, Index: -1, Command: nil}, -1
 	} else {
-		return rf.log[lens-2]
+		return rf.log[lens-2], lens - 2
 	}
 }
 
@@ -110,20 +110,23 @@ func (rf *Raft) getLastLogOf(index int) LogEntry {
 	}
 }
 
-func (rf *Raft) ApplyMsg2B(command interface{}, index int) {
-	rf.applyCh <- ApplyMsg{CommandValid: true, Command: command, CommandIndex: index}
+//index的作用就是打日志。。
+func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
+	//nil代表是空entry
+	if thisEntry.Command != nil {
+		Debug(dCommit, "发送测试数据 command=%#v，内部index=%d 修正index=%d", rf.me, thisEntry.Command, index, thisEntry.Index+1)
+		rf.applyCh <- ApplyMsg{CommandValid: true, Command: thisEntry.Command, CommandIndex: thisEntry.Index + 1} //index从一开始，所以返回+1
+	} else {
+		Debug(dCommit, "因为cmd=nil不发送测试数据", rf.me)
+	}
 }
 
 func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
 	Debug(dTrace, "进入FollowerUpdateCommitIndex", rf.me)
-	Debug(dTrace, "LeaderCommit =%d len(rf.log) = %d", rf.me, LeaderCommit, len(rf.log))
 	c := Min(LeaderCommit, len(rf.log)-1) //follower就不用唤醒cond了
 	//注意空entry就不用apply了。。
 	for i := rf.commitIndex + 1; i <= c; i++ {
-		if rf.log[i].Command != nil {
-			Debug(dCommit, "发送测试数据 command=%#v index=%d", rf.me, rf.log[i], i)
-			rf.ApplyMsg2B(rf.log[i].Command, i)
-		}
+		rf.ApplyMsg2B(&rf.log[i], i)
 	}
 
 	//Assert(c >= rf.commitIndex, "") //leader的commitId可能比我（follower）小！，见figure8，和bugfix9
@@ -180,6 +183,13 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 	if maxIndex > rf.commitIndex {
 		//过半了,检查当前index的任期
 		if rf.log[maxIndex].Term == rf.term {
+
+			//用于测试
+			//很坑。。因为可能有fig.8的情况，主节点的commitId不一定是满的！,所以主节点更新commitId的时候，需要多次给chan发送数据！
+			for i := rf.commitIndex + 1; i <= maxIndex; i++ {
+				rf.ApplyMsg2B(&rf.log[i], i)
+			}
+
 			rf.commitIndex = maxIndex
 			rf.CommitIndexCondition.Broadcast()
 			Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%#v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
@@ -217,11 +227,11 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 		} else {
 			arr = Copy(arr, rf.log[nextIndex:])
 		}
-		args = &AppendEntriesArgs{rf.term, arr, lastLog.Index,
+		args = &AppendEntriesArgs{rf.term, arr, nextIndex - 1, //因为nextIndex从0开始，所以可以保证-1
 			lastLog.Term, rf.commitIndex, rf.me}
 		Assert(len(arr) > 0, "")
 	} else {
-		args = &AppendEntriesArgs{rf.term, []LogEntry{rf.log[nextIndex]}, lastLog.Index,
+		args = &AppendEntriesArgs{rf.term, []LogEntry{rf.log[nextIndex]}, nextIndex - 1,
 			lastLog.Term, rf.commitIndex, rf.me}
 	}
 

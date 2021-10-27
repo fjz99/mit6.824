@@ -2,7 +2,8 @@ package raft
 
 //todo 日志提交的时候，刚被选举为leader的节点会发送空entry，此时可能会和第一轮心跳冲突，不过无所谓
 //todo batchsize选择
-//todo index从1开始+nil
+//todo 重构，继续从0开始，但是nil没有index，或者for循环，检验nil
+//todo 解决办法，Index字段保存的是真正的Index，而服务器内部，仍然使用0下标开始+数组index进行复制
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -131,12 +132,13 @@ func (rf *Raft) broadcastVote() bool {
 	localTerm := rf.term //因为可能在这个轮次中，返回term修改
 	var args *RequestVoteArgs
 	lastLog := rf.getLastLog()
-	args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
+	lastLogIndex := len(rf.log) - 1
+	args = &RequestVoteArgs{rf.term, rf.me, lastLogIndex, lastLog.Term}
 	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, rf.term, *args)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			//避免多个任务访问args的竞争。。
-			args = &RequestVoteArgs{rf.term, rf.me, lastLog.Index, lastLog.Term}
+			args = &RequestVoteArgs{rf.term, rf.me, lastLogIndex, lastLog.Term}
 			rf.senderChannel[i] <- &Task{voteRpcFailureCallback,
 				voteRpcSuccessCallback, args, &RequestVoteReply{}, "Raft.RequestVote"}
 			//注意reply每次都要创建新的才行
@@ -288,7 +290,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	//添加到本地
-	rf.log = append(rf.log, LogEntry{Term: rf.term, Index: len(rf.log), Command: command})
+	lastLog := rf.getLastLog()
+	if command == nil {
+		//开始的时候lastLog的index是-1，所以这个index会变成0
+		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index, Command: command})
+	} else {
+		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index + 1, Command: command})
+	}
 	thisIndex := len(rf.log) - 1
 
 	//开始广播
@@ -299,8 +307,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			if len(rf.senderChannel[i]) > 0 {
 				Debug(dCommit, "WARN:企图对S%d发送日志的时候，队列中还有别的内容等待发送len=%d", rf.me, i, len(rf.senderChannel[i]))
 			}
-			prev := rf.getLastLastLog()
-			args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prev.Index,
+			prev, prevIndex := rf.getLastLastLog()
+			args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prevIndex,
 				prev.Term, rf.commitIndex, rf.me}
 			rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
@@ -325,18 +333,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		Debug(dCommit, "日志index=%d提交成功，此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
-		//用于测试
-		Debug(dCommit, "发送测试数据 command=%#v index=%d", rf.me, command, thisIndex)
-		rf.ApplyMsg2B(command, thisIndex)
 
 		//广播commitId,go 防止死锁，因为defer
-		go rf.broadCastHeartBeat()
+		//go rf.broadCastHeartBeat() //这个需要吗？
 	})
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d", rf.me, rf.commitIndex)
-	return rf.commitIndex, rf.term, rf.state == LEADER
+	fuckIndex := rf.log[rf.commitIndex].Index + 1
+	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,修正后为 %d", rf.me, rf.commitIndex, fuckIndex)
+	return fuckIndex, rf.term, rf.state == LEADER //index从一开始，所以返回+1
 }
 
 //
@@ -392,8 +398,8 @@ func (rf *Raft) initLeader() {
 
 	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
 	//todo 心跳检测等待结果，决定是否主动降级
-	rf.broadCastHeartBeat()
-	//rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
+	//rf.broadCastHeartBeat()
+	rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
 
 	rf.mu.Lock()
 	Debug(dLeader, "init leader done!", rf.me)

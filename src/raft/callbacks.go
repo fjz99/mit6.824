@@ -72,7 +72,7 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 		Assert(req.Log != nil && len(req.Log) > 0, "") //这个是心跳，按理说不应该执行这个回调
 
 		//matchIndex check
-		reqMaxIndex := req.Log[len(req.Log)-1].Index
+		reqMaxIndex := req.PrevLogIndex + len(req.Log)
 		//因为完全包含的话，日志也算复制成功。。
 		//修改matchIndex,matchIndex可以在不提交的时候修改
 		if rf.matchIndex[peerIndex] < reqMaxIndex {
@@ -89,11 +89,11 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 		//归零
 		rf.backwardBase[peerIndex] = 1
 	} else {
+		rf.backward(peerIndex)
 		Debug(dCommit, "接收到S%d返回，日志复制失败,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 
 		//fixme 根据match进行回退
-		rf.backward(peerIndex)
 		rf.generateNewTask(peerIndex, false, true)
 	}
 

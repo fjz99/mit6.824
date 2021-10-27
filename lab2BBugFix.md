@@ -27,3 +27,6 @@ one函数，会检查那个是leader，然后根据start返回的index，来检�
 chan中发送的数据的index会放到测试程序log数组中的对应位置，用于测试
 16. 我的nil没发送，所以导致out of order，而加了nil为了保证index从1开始。。
 17. **所以说，nil无所谓，测试用例的index必须从1开始，并且发送nil，否则就错误**
+此外，还要求nil不占index。。解决办法是用我的index-term，应为term从0开始，所以再-1
+18. 很坑，leader节点可能是重新选举的，所以commitId不是满的，但是选举结束后会发送一个nil entry，此时，顺便把前面的也提交了
+但是此时，需要在start方法中，顺便把前面的也发送到chan中，否则永远无法完成任务

@@ -16,16 +16,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	lastLog := rf.getLastLog()
+	lasLogIndex := len(rf.log) - 1
 	if rf.voteFor == -1 || rf.voteFor == args.CandidateId {
 		if args.LastLogTerm > lastLog.Term ||
-			(args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lastLog.Index) {
-			Debug(dVote, "决定投票给 S%d，因为args=%#v,lastLog=%#v,我的term=%d，我的voteFor=%d",
-				rf.me, args.CandidateId, args, lastLog, rf.term, rf.voteFor)
+			(args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lasLogIndex) {
+			Debug(dVote, "决定投票给 S%d，因为args=%#v,lastLogIndex=%d,我的term=%d，我的voteFor=%d",
+				rf.me, args.CandidateId, args, lasLogIndex, rf.term, rf.voteFor)
 			rf.ResetTimer() //！！
 			rf.voteFor = args.CandidateId
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: true}
 		} else {
-			Debug(dVote, "拒绝给S%d投票,因为args=%#v,lastLog=%#v", rf.me, args.CandidateId, args, lastLog)
+			Debug(dVote, "拒绝给S%d投票,因为args=%#v,lastLogIndex=%d", rf.me, args.CandidateId, args, lasLogIndex)
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: false}
 		}
 	} else {
@@ -86,7 +87,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			thisLog = rf.log[args.PrevLogIndex]
 			Assert(thisLog.Term <= args.PrevLogTerm, "") //否则不会选举为leader
 			//todo 此时的index是多少？？!!!
-			Assert(thisLog.Index == args.PrevLogIndex, "") //????
+			//Assert(thisLog.Index == args.PrevLogIndex, "") //????->_->
 
 			if thisLog.Term < args.PrevLogTerm { //即不等于
 				exists = false

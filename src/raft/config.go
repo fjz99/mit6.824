@@ -450,7 +450,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
 		cfg.mu.Unlock()
-		fmt.Println("nCommitted: S ", i, "cmd ", cmd1, "ok ", ok)
+		//fmt.Println("nCommitted: S ", i, "cmd ", cmd1, "ok ", ok)
 		if ok {
 			if count > 0 && cmd != cmd1 {
 				cfg.t.Fatalf("committed values do not match: Index %v, %v, %v\n",
@@ -529,30 +529,35 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 		}
 
+		fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成开始")
 		if index != -1 {
 			//index是返回的提交id
 			// somebody claimed to be the leader and to have
 			// submitted our Command; wait a while for agreement.
 			//每隔一段时间，每个节点都尝试一次，检查提交是否完成，一直不行就报错
+			//todo start只会调用一次，为什么我会多次接收到日志提交请求？
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
-				fmt.Println("检查提交是否完成")
 				nd, cmd1 := cfg.nCommitted(index)
+				fmt.Printf("检查提交是否完成，对应的nd为%dcmd为%#v\n", nd, cmd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
+						fmt.Println("检查提交是否完成，结束，return了！")
 						// and it was the Command we submitted.
 						return index
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
+			fmt.Println("太久没agree，超时了")
 			if retry == false {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
+		fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成结束")
 	}
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1
