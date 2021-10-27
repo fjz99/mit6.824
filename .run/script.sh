@@ -1,0 +1,1 @@
+python dslogs.py failedTests/e-1.log  -c 3 -i VOTE,LOG2,TRCE,TEST > c.log

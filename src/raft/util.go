@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -114,6 +115,8 @@ func (rf *Raft) ApplyMsg2B(command interface{}, index int) {
 }
 
 func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
+	Debug(dTrace, "进入FollowerUpdateCommitIndex", rf.me)
+	Debug(dTrace, "LeaderCommit =%d len(rf.log) = %d", rf.me, LeaderCommit, len(rf.log))
 	c := Min(LeaderCommit, len(rf.log)-1) //follower就不用唤醒cond了
 	//注意空entry就不用apply了。。
 	for i := rf.commitIndex + 1; i <= c; i++ {
@@ -163,20 +166,27 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
 
+//找超过半数的，办法很简单，直接排序，然后取前半数个,找到最大值，一起更新
+//注意判断term！ todo
 func (rf *Raft) LeaderUpdateCommitIndex() {
-	count := 0
-	minC := 0x3f3f3f3f
-	Assert(rf.me == rf.leaderId, "")
-	for pos, i := range rf.matchIndex {
-		if pos != rf.me && i > rf.commitIndex {
-			count++
-			minC = Min(minC, i)
+	temp := make([]int, len(rf.nextIndex))
+	copy(temp, rf.matchIndex)
+	temp[rf.me] = len(rf.log) - 1
+	//逆序排序
+	sort.Sort(sort.Reverse(sort.IntSlice(temp))) //.......
+	Debug(dCommit, "LeaderUpdateCommitIndex matchIndex逆序排序的结果为 %#v ", rf.me, temp)
+	maxIndex := temp[rf.n/2]
+	Debug(dCommit, "LeaderUpdateCommitIndex 选择的过半最小matchIndex=%d", rf.me, maxIndex)
+	if maxIndex > rf.commitIndex {
+		//过半了,检查当前index的任期
+		if rf.log[maxIndex].Term == rf.term {
+			rf.commitIndex = maxIndex
+			rf.CommitIndexCondition.Broadcast()
+			Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%#v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
+		} else {
+			Debug(dCommit, "最大的过半matchIndex为%d，但是term为%d，而leader term为%d，所以放弃更新commitId",
+				rf.me, maxIndex, rf.log[maxIndex].Term, rf.term)
 		}
-	}
-	if count >= rf.n/2 { //因为自己和自己的matchIndex无视
-		rf.commitIndex = minC
-		rf.CommitIndexCondition.Broadcast()
-		Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%#v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
 	}
 }
 
@@ -241,6 +251,16 @@ func (rf *Raft) backward(peerIndex int) {
 	}
 
 	rf.backwardBase[peerIndex] *= 2
+}
+
+func (rf *Raft) cleanupSenderChannel() {
+	Debug(dInfo, " state = %d 清空发送队列，因为状态已经是follower了", rf.me, rf.state)
+	Assert(rf.state != LEADER, "") //??
+	for _, c := range rf.senderChannel {
+		for len(c) > 0 {
+			_ = <-c
+		}
+	}
 }
 
 func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),

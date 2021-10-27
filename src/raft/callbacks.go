@@ -21,7 +21,7 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	rf.doneRPCs++
 	if resp.Term > rf.term {
 		//转为follower
-		Debug(dVote, "接收到S%d返回，但是term大于当前服务器S%d", rf.me, peerIndex, rf.me)
+		Debug(dTerm, "接收到S%d返回，但是term大于当前服务器S%d", rf.me, peerIndex, rf.me)
 		rf.increaseTerm(resp.Term, -1)
 	}
 	//验证投票同意与否
@@ -64,7 +64,7 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 	resp := reply.(*AppendEntriesReply)
 	req := args.(*AppendEntriesArgs)
 	if resp.Term > rf.term {
-		Debug(dCommit, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
+		Debug(dTerm, "接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
 		rf.increaseTerm(resp.Term, -1)
 	}
 

@@ -12,3 +12,18 @@
 8. 机器莫名卡顿，导致bug。。因为超时依赖于物理时钟，一卡顿，时钟漂移，直接超时了。。
 9. e-67是一个非常罕见且有意思的情况，1 2时钟漂移，同时超时，1选为leader，而1的commitIndex=2，但是源leader是3，但是源leader被废黜，但是1有所有的log（因为选为leader的条件）
 但是1的commitId不是日志最后一个位置，即这是figure8的情况！此时，follower的commitId比leader大！
+10. go test的IDEA环境下，随机数是静止的！所以不要用GoLand！，用命令行！
+11. 同步初始化，初始化的日志提交是一起的，或者使用论文中的，判断提交的term
+12. commit条件，term，半数,防止本term提交之前term的日志，即fig.8，这样的话，每次选为leader之后，只需提交一个空entry，因为空entry可能导index后退，
+此时需要校验！防止本term提交之前term的日志，即fig.8
+13. 日志策略，发送线程LOG2，选举VOTE，log提交COMMIT，快照SNAPSHOT，其他不重要日志（DEBUG）LOG1，必看LEADER，INFO必看，是通用信息；
+14. leader降级为follower了的时候,清空发送队列,同样，重试的时候，sender线程也会判断当前状态，防止leader被降级后一直发送日志
+即folower不能发送数据，验证一下，防止多次发送无意义的数据
+15. 具体check test的流程：从chan中读取，读取一个之后，检查提交的前驱是否正确，
+首先调用cfg.checkLogs（）
+对于每个chan中的提交数据，检查找所有节点的command index下的command，假如存在command，command还不同，就错误："commit Index=%v server=%v %v != server=%v %v"
+然后检查提交数据的前驱节点是否存在，不存在，就报错"server %v apply out of order %v"
+one函数，会检查那个是leader，然后根据start返回的index，来检查有几个完成了提交
+chan中发送的数据的index会放到测试程序log数组中的对应位置，用于测试
+16. 我的nil没发送，所以导致out of order，而加了nil为了保证index从1开始。。
+17. **所以说，nil无所谓，测试用例的index必须从1开始，并且发送nil，否则就错误**

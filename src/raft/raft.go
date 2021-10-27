@@ -1,11 +1,8 @@
 package raft
 
 //todo 日志提交的时候，刚被选举为leader的节点会发送空entry，此时可能会和第一轮心跳冲突，不过无所谓
-//todo 日志提交的时候也是，如果要发心跳了，而此时队列里还有东西，就没必要发送心跳了，因为日志提交也有心跳的功能
 //todo batchsize选择
-//todo basicAgreement的测试，可能遇到还没来得及发送空entry就有一个agreement来了的情况。。此时index就不对了；见e-116.log
-// 解决办法，判断前驱，必须是term=现在，否则就在cond等待commit,为了保证后续任务的有序性，需要添加一个缓冲队列。。
-//todo 改变initLeader的位置，先初始化再状态转换
+//todo index从1开始+nil
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -54,15 +51,26 @@ func (rf *Raft) messageSender(peerIndex int) {
 	for !rf.killed() {
 		task := <-ch
 		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
-		Debug(dLog, prefix+"对 S%d 发送请求 %#v", rf.me, peerIndex, peerIndex, task.args)
+
+		Debug(dLog2, prefix+"对 S%d 发送请求 %#v", rf.me, peerIndex, peerIndex, task.args)
+		rf.mu.Lock()
+		s := rf.state
+		rf.mu.Unlock()
+		if s == FOLLOWER {
+			continue
+		}
 		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
-				Debug(dLog, prefix+"rpc请求超时%#v", rf.me, peerIndex, task.args)
+				Debug(dLog2, prefix+"rpc请求超时%#v", rf.me, peerIndex, task.args)
 				counter++
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
 				if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
-					Debug(dLog, prefix+"rpc请求超时%#v,重试!!", rf.me, peerIndex, task.args)
-					ch <- task
+					if rf.state == FOLLOWER {
+						Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
+					} else {
+						ch <- task
+						Debug(dLog2, prefix+"rpc请求超时%#v,重试!!", rf.me, peerIndex, task.args)
+					}
 				} else {
 					counter = 0
 				}
@@ -75,23 +83,27 @@ func (rf *Raft) messageSender(peerIndex int) {
 			func(rf *Raft, result interface{}) {
 				ok := result.(bool)
 				if !ok {
-					Debug(dLog, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
+					Debug(dLog2, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
 					counter++
 					//这个是rpc库本身请求失败
 					if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
-						Debug(dLog, prefix+"请求失败%#v,重试!!", rf.me, peerIndex, task.args)
-						ch <- task
+						if rf.state == FOLLOWER {
+							Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
+						} else {
+							Debug(dLog2, prefix+"请求失败%#v,重试!!", rf.me, peerIndex, task.args)
+							ch <- task
+						}
 					} else {
 						counter = 0
 					}
 				} else {
-					Debug(dLog, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
+					Debug(dLog2, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
 					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply, task)
 					counter = 0
 				}
 			})
 		if counter == 0 {
-			Debug(dLog, prefix+"对 S%d 发送请求结束 %#v", rf.me, peerIndex, peerIndex, task.args)
+			Debug(dLog2, prefix+"对 S%d 发送请求结束 %#v", rf.me, peerIndex, peerIndex, task.args)
 		}
 	}
 }
@@ -148,10 +160,15 @@ func (rf *Raft) broadcastVote() bool {
 		return true
 	}
 	if rf.agreeCounter >= rf.n/2+1 {
-		Debug(dVote, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
-		//主循环处理任何状态变更
+		Debug(dInfo, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
+
 		rf.ChangeState(LEADER)
 		rf.leaderId = rf.me
+
+		//init有锁,所以异步执行，这样此函数返回后，init就能执行
+		//start第一个条日志的时候，也依赖于LEADER状态
+		go rf.initLeader()
+
 		return true
 	} else {
 		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, localTerm, rf.agreeCounter)
@@ -274,9 +291,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log = append(rf.log, LogEntry{Term: rf.term, Index: len(rf.log), Command: command})
 	thisIndex := len(rf.log) - 1
 
-	rf.doneRPCs = 0
-	rf.agreeCounter = 1
-
 	//开始广播
 	Debug(dCommit, "广播日志 %#v", rf.me, rf.getLastLog())
 	for i := 0; i < rf.n; i++ {
@@ -314,10 +328,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		//用于测试
 		Debug(dCommit, "发送测试数据 command=%#v index=%d", rf.me, command, thisIndex)
 		rf.ApplyMsg2B(command, thisIndex)
+
+		//广播commitId,go 防止死锁，因为defer
+		go rf.broadCastHeartBeat()
 	})
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d", rf.me, rf.commitIndex)
 	return rf.commitIndex, rf.term, rf.state == LEADER
 }
 
@@ -374,10 +392,12 @@ func (rf *Raft) initLeader() {
 
 	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
 	//todo 心跳检测等待结果，决定是否主动降级
-	//rf.broadCastHeartBeat()
-	rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
+	rf.broadCastHeartBeat()
+	//rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
 
+	rf.mu.Lock()
 	Debug(dLeader, "init leader done!", rf.me)
+	rf.mu.Unlock()
 }
 
 //也要负责和状态转换有关的属性设置
@@ -392,8 +412,9 @@ func (rf *Raft) processLeader() {
 				//CANDIDATE是超时转换的！
 				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
 			} else {
-				//变成follower了
-				Debug(dLeader, "leader 被 S%d term=%d 降级了！", rf.me, rf.leaderId, rf.term)
+				//变成follower了,清空发送队列
+				rf.cleanupSenderChannel()
+				Debug(dLeader, "leader 被 S%d term=%d 降级了为follower！，清空发送队列", rf.me, rf.leaderId, rf.term)
 			}
 			rf.mu.Unlock()
 			break
@@ -444,13 +465,16 @@ func (rf *Raft) processCandidate() {
 	select {
 	case states := <-rf.stateChanging:
 		{
-			//rf.mu.Lock() 不要！
+			rf.mu.Lock() //rf.me
 			Debug(dInfo, "主循环接收到状态转换 %d -> %d", rf.me, states.from, states.to)
-			if states.to == LEADER {
-				//变成leader了
-				rf.initLeader() //同步的
+			if states.to == FOLLOWER {
+				rf.cleanupSenderChannel()
 			}
-			//rf.mu.Unlock()
+			//if states.to == LEADER {
+			//变成leader了
+			//rf.initLeader() //同步的
+			//}
+			rf.mu.Unlock()
 			break
 		}
 	case _ = <-time.After(rf.electionInterval):

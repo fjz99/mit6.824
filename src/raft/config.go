@@ -133,9 +133,12 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+//i 是peerIndex
+//cfg.logs是一个map，对应key是peerIndex，已经初始化了，value是command数组
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
+	//找所有节点的command index下的command，假如存在command，command还不同，就错误
 	for j := 0; j < len(cfg.logs); j++ {
 		if old, oldok := cfg.logs[j][m.CommandIndex]; oldok && old != v {
 			log.Printf("%v: log %v; server %v\n", i, cfg.logs[i], cfg.logs[j])
@@ -144,7 +147,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 				m.CommandIndex, i, m.Command, j, old)
 		}
 	}
-	_, prevok := cfg.logs[i][m.CommandIndex-1]
+	_, prevok := cfg.logs[i][m.CommandIndex-1] //判断前驱是否存在
 	cfg.logs[i][m.CommandIndex] = v
 	if m.CommandIndex > cfg.maxIndex {
 		cfg.maxIndex = m.CommandIndex
@@ -433,6 +436,8 @@ func (cfg *config) checkNoLeader() {
 }
 
 // how many servers think a log entry is committed?
+//检查map，判断有多少个节点有这个index，如果对于的index不匹配，就报错
+// index 为leader的index
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	var cmd interface{} = nil
@@ -440,11 +445,12 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
+		//fmt.Printf("nCommitted: S%d %#v", i, cfg.logs[i])
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
 		cfg.mu.Unlock()
-
+		fmt.Println("nCommitted: S ", i, "cmd ", cmd1, "ok ", ok)
 		if ok {
 			if count > 0 && cmd != cmd1 {
 				cfg.t.Fatalf("committed values do not match: Index %v, %v, %v\n",
@@ -524,10 +530,13 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		}
 
 		if index != -1 {
+			//index是返回的提交id
 			// somebody claimed to be the leader and to have
 			// submitted our Command; wait a while for agreement.
+			//每隔一段时间，每个节点都尝试一次，检查提交是否完成，一直不行就报错
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
+				fmt.Println("检查提交是否完成")
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
 					// committed

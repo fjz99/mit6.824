@@ -37,12 +37,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	Assert(args.LeaderId != rf.me, "")
-	Debug(dLog2, "接收到 leader:S%d 的AppendEntries rpc %#v", rf.me, args.LeaderId, *args)
+	//Debug(dInfo, "接收到 leader:S%d 的AppendEntries rpc %#v", rf.me, args.LeaderId, *args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if args.Term < rf.term {
-		Debug(dVote, "接收到 leader:S%d 的 Term = %d,忽略", rf.me, args.LeaderId, args.Term)
+		Debug(dInfo, "接收到 leader:S%d 的 Term = %d,忽略", rf.me, args.LeaderId, args.Term)
 		*reply = AppendEntriesReply{Term: rf.term, Success: false}
 		return
 	} else if args.Term > rf.term {
@@ -66,7 +66,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Log == nil || len(args.Log) == 0 {
 		//心跳
-		Debug(dLog2, "接收到 leader:S%d 的心跳 rpc", rf.me, args.LeaderId)
+		Debug(dLog, "接收到 leader:S%d 的心跳 rpc", rf.me, args.LeaderId)
 
 		rf.FollowerUpdateCommitIndex(args.LeaderCommit) //!
 
@@ -94,7 +94,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		if !exists {
-			Debug(dCommit, "没！找到log数组中对应的前驱位置，entry为 %#v", rf.me, thisLog)
+			Debug(dCommit, "没！找到log数组中对应的前驱位置，rpc 参数为 %#v,rpc handler返回", rf.me, *args)
 			*reply = AppendEntriesReply{Term: rf.term, Success: false}
 			return
 		}
@@ -113,6 +113,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					rf.me, leaderLog[leaderLogIndex], followerLog[followerLogIndex])
 				mismatchIndex = followerLogIndex
 			}
+			leaderLogIndex++
+			followerLogIndex++
 		}
 		//1.执行删除
 		if mismatchIndex != -1 {
