@@ -113,16 +113,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				Debug(dCommit, "找到了log数组中第一个不匹配的位置，entry为 leader=%#v，follower=%#v",
 					rf.me, leaderLog[leaderLogIndex], followerLog[followerLogIndex])
 				mismatchIndex = followerLogIndex
+				break
 			}
 			leaderLogIndex++
 			followerLogIndex++
 		}
 		//1.执行删除
 		if mismatchIndex != -1 {
+			Debug(dTrace, "开始执行删除 mismatchIndex=%d", rf.me, mismatchIndex)
 			//这个做法速度慢
 			temp := rf.log
 			rf.log = []LogEntry{}
 			rf.log = Copy(rf.log, temp[:mismatchIndex])
+			Debug(dTrace, "删除结果为 %#v", rf.me, rf.log)
 			//2.复制日志
 			for i := leaderLogIndex; i < len(leaderLog); i++ {
 				rf.log = append(rf.log, leaderLog[i])

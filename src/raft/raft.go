@@ -54,6 +54,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
 
 		Debug(dLog2, prefix+"对 S%d 发送请求 %#v", rf.me, peerIndex, peerIndex, task.args)
+
 		rf.mu.Lock()
 		s := rf.state
 		rf.mu.Unlock()
@@ -298,6 +299,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index + 1, Command: command})
 	}
 	thisIndex := len(rf.log) - 1
+	localLastLog := rf.log[len(rf.log)-1] //因为可能并发修改
 
 	//开始广播
 	Debug(dCommit, "广播日志 %#v", rf.me, rf.getLastLog())
@@ -340,9 +342,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fuckIndex := rf.log[rf.commitIndex].Index + 1
-	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,修正后为 %d", rf.me, rf.commitIndex, fuckIndex)
-	return fuckIndex, rf.term, rf.state == LEADER //index从一开始，所以返回+1
+
+	//fuckIndex := rf.log[rf.commitIndex].Index + 1
+	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,返回logindex=%d,修正后为 %d",
+		rf.me, rf.commitIndex, thisIndex, localLastLog.Index+1)
+	return localLastLog.Index + 1, rf.term, rf.state == LEADER //index从一开始，所以返回+1
 }
 
 //

@@ -269,6 +269,7 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting Index 2.
+	// 即这个20的command可能被删除了。。因为新的leader是缺失20的。。
 	leader2 := cfg.checkOneLeader()
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
 	if ok2 == false {
@@ -277,6 +278,8 @@ func TestFailNoAgree2B(t *testing.T) {
 	if index2 < 2 || index2 > 3 {
 		t.Fatalf("unexpected Index %v", index2)
 	}
+	//time.Sleep(time.Duration(1) * time.Second)
+	//panic(1)
 
 	cfg.one(1000, servers, true)
 

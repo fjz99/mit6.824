@@ -373,7 +373,7 @@ func (cfg *config) setlongreordering(longrel bool) {
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
 func (cfg *config) checkOneLeader() int {
-	fmt.Println("fuck! checkOneLeader 调用开始")
+	//fmt.Println("fuck! checkOneLeader 调用开始")
 	for iters := 0; iters < 10; iters++ {
 		//fmt.Printf("fuck! checkOneLeader 调用开始 TRUN [%d]/9\n", iters)
 		ms := 450 + (rand.Int63() % 100)
@@ -402,7 +402,7 @@ func (cfg *config) checkOneLeader() int {
 			return leaders[lastTermWithLeader][0]
 		}
 	}
-	fmt.Println("fuck! checkOneLeader 调用结束")
+	//fmt.Println("fuck! checkOneLeader 调用结束")
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
 }
@@ -529,7 +529,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 		}
 
-		fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成开始")
+		//fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成开始")
 		if index != -1 {
 			//index是返回的提交id
 			// somebody claimed to be the leader and to have
@@ -539,7 +539,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				fmt.Printf("检查提交是否完成，对应的nd为%dcmd为%#v\n", nd, cmd)
+				//fmt.Printf("检查提交是否完成，对应的nd为%dcmd为%#v\n", nd, cmd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
@@ -550,14 +550,14 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			fmt.Println("太久没agree，超时了")
+			//fmt.Println("太久没agree，超时了")
 			if retry == false {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
-		fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成结束")
+		//fmt.Println("对应此次start的返回提交id为", index, " 检查提交是否完成结束")
 	}
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1
