@@ -54,6 +54,7 @@ func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, repl
 
 func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
 	Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试", rf.me, peerIndex)
+	rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
 	return true
 }
 
@@ -87,9 +88,8 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 		rf.generateNewTask(peerIndex, true, true)
 		//归零
-		rf.backwardBase[peerIndex] = 1
 	} else {
-		rf.backward(peerIndex)
+		rf.backward(peerIndex, resp)
 		Debug(dCommit, "接收到S%d返回，日志复制失败,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 

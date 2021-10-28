@@ -145,7 +145,7 @@ func (rf *Raft) ChangeState(to State) {
 		}
 		if to == FOLLOWER {
 			rf.matchIndex[rf.me] = rf.commitIndex
-			Debug(dInfo, "状态转换为follower，所以初始化matchIndex=commitId=%d", rf.commitIndex)
+			Debug(dInfo, "状态转换为follower，所以初始化matchIndex=commitId=%d", rf.me, rf.commitIndex)
 		}
 		rf.state = to
 		//这个chan太容易死锁了
@@ -225,7 +225,6 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 
 	if lastSuccess {
 		//归零
-		rf.backwardBase[peerIndex] = 1
 
 		var arr []LogEntry
 		if len(rf.log)-nextIndex >= n {
@@ -254,19 +253,37 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 }
 
 //根据match进行回退,
-//目前使用指数退让法1 2 4 8
-func (rf *Raft) backward(peerIndex int) {
+func (rf *Raft) backward(peerIndex int, reply *AppendEntriesReply) {
 	//回退之前的nextIndex应该大于matchIndex+1，因为matchIndex一定匹配。。因为开始时0，-1所以大于好一点
-	Assert(rf.nextIndex[peerIndex] > rf.matchIndex[peerIndex], "")
+	//Assert(rf.nextIndex[peerIndex] > rf.matchIndex[peerIndex], "")
 
-	rf.nextIndex[peerIndex] -= rf.backwardBase[peerIndex]
-	if rf.nextIndex[peerIndex] <= rf.matchIndex[peerIndex] {
-		Debug(dCommit, "WARN:S%d next index %d退让的时候，退让的比matchIndex %d 还小了",
-			rf.me, peerIndex, rf.nextIndex[peerIndex], rf.matchIndex[peerIndex])
-		rf.nextIndex[peerIndex] = rf.matchIndex[peerIndex] + 1
+	//查找是否存在
+	ci := 0
+	for ; ci < len(rf.log); ci++ {
+		if rf.log[ci].Term == reply.ConflictTerm {
+			break
+		}
 	}
+	if ci == len(rf.log) {
+		rf.nextIndex[peerIndex] = reply.ConflictIndex
+		Debug(dCommit, "没有找到follower的ConflictTerm=%d,所以设置nextIndex=ConflictIndex=%d",
+			rf.me, reply.ConflictTerm, reply.ConflictIndex)
+	} else {
+		//找最后一个位置
+		for ; ci < len(rf.log) && rf.log[ci].Term == reply.Term; ci++ {
 
-	rf.backwardBase[peerIndex] *= 2
+		}
+		rf.nextIndex[peerIndex] = ci
+		Debug(dCommit, "找到了follower的ConflictTerm=%d,所以设置nextIndex=这个term的下一个term的第一个index=%d",
+			rf.me, reply.ConflictTerm, ci)
+	}
+}
+
+func (rf *Raft) cleanupSenderChannelFor(peerIndex int) {
+	for len(rf.senderChannel[peerIndex]) > 0 {
+		_ = <-rf.senderChannel[peerIndex]
+	}
+	Debug(dCommit, "生成 S%d 新的任务前，先清除队列中的任务", rf.me, peerIndex)
 }
 
 func (rf *Raft) cleanupSenderChannel() {

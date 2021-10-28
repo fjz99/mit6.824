@@ -43,8 +43,10 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 }
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term          int
+	Success       bool
+	ConflictTerm  int
+	ConflictIndex int
 }
 
 type LogEntry struct {
@@ -92,7 +94,6 @@ type Raft struct {
 	lastApplied   int          //最后被应用到状态机的id
 	nextIndex     []int        //leader使用初始化为 最大日志index的下一个id，用于回溯
 	matchIndex    []int        //leader使用初始化为 -1
-	backwardBase  []int        //用于指数退让
 	senderChannel []chan *Task //为了并行发送心跳和日志提交，一个一个提交的话，是串行，非常慢，还存在超时重试的问题！在
 
 	lastAccessTime   int64 //用于心跳检测

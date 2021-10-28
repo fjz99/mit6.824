@@ -78,28 +78,40 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		*reply = AppendEntriesReply{Term: rf.term, Success: true}
 	} else {
-		//todo logs
 		Debug(dCommit, "接收到 leader:S%d 日志log rpc,leader=%#v,follower=%#v", rf.me, args.LeaderId, *args, rf.log)
 
 		//检查日志索引位置是否存在
 		exists := true
 		thisLog := LogEntry{-1, -1, nil}
+		conflictIndex, conflictTerm := -1, -1
 		if args.PrevLogIndex == -1 {
 			exists = true //第一次log
 		} else if args.PrevLogIndex >= len(rf.log) {
 			exists = false
+			conflictIndex = len(rf.log)
+			conflictTerm = -1
 		} else {
 			thisLog = rf.log[args.PrevLogIndex]
 			//Assert(thisLog.Term <= args.PrevLogTerm, "") //否则不会选举为leader，其实不是的。。严格按照fig2来，直接判断相等即可
 
 			if thisLog.Term != args.PrevLogTerm {
 				exists = false
+
+				//查找这个term的第一个index
+				conflictIndex = args.PrevLogIndex
+				conflictTerm = thisLog.Term
+				for conflictIndex >= 0 && rf.log[conflictIndex].Term == conflictTerm {
+					conflictIndex--
+				}
+				conflictIndex++ //++才等于
 			}
 		}
 
 		if !exists {
+			//实行backward优化
 			Debug(dCommit, "没！找到log数组中对应的前驱位置，rpc 参数为 %#v,rpc handler返回", rf.me, *args)
-			*reply = AppendEntriesReply{Term: rf.term, Success: false}
+			Debug(dCommit, "conflictIndex=%d,conflictTerm=%d", rf.me, conflictIndex, conflictTerm)
+			*reply = AppendEntriesReply{Term: rf.term, Success: false, ConflictIndex: conflictIndex, ConflictTerm: conflictTerm}
 			return
 		}
 		Debug(dCommit, "找到了log数组中对应的前驱位置，entry为 %#v", rf.me, thisLog)
@@ -164,6 +176,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		//获得返回值
 		Debug(dCommit, "日志复制完成", rf.me)
-		*reply = AppendEntriesReply{Term: rf.term, Success: true}
+		*reply = AppendEntriesReply{Term: rf.term, Success: true, ConflictIndex: -1, ConflictTerm: -1}
 	}
 }

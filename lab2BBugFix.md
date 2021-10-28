@@ -44,3 +44,23 @@ matchIndex在日志复制后，会增加。。。，直接借用matchIndex[rf.me
 If leaderCommit > commitIndex, set commitIndex =
     min(leaderCommit, index of last new entry)
 即，是复制完成后最新的log的位置。。但是为了使心跳也能更新commitIndex，还是要维护matchIndex
+23. 如果发生网络分区的话，就会导致无线重试，而chan size有限，此时就会死锁。。所以，在重试的时候，也可以清空发送队列，
+即使把未来要提交的新任务清空了也没事，因为只要有一个发送成功，就会自动backward
+24. 加速backward的优化：
+If a follower does not have prevLogIndex in its log, it should return with conflictIndex = len(log) and conflictTerm = None.
+如果找不到prev的index就返回conflictIndex = len(log) and conflictTerm = None.
+If a follower does have prevLogIndex in its log, but the term does not match,
+it should return conflictTerm = log[prevLogIndex].Term, and then search its log for the first index whose entry has term equal to conflictTerm.
+如果找到了prev，但是term不同，那就返回term，和这个term对应的第一个index
+
+对于leader而言，
+Upon receiving a conflict response, the leader should first search its log for conflictTerm.
+If it finds an entry in its log with that term, it should set nextIndex to be the one beyond the index of the last entry in that term in its log.
+如果找到了对应冲突term的日志，那就把nextIndex设置为对应term的最后一个日志的index下一个位置，即index+1
+If it does not find an entry with that term, it should set nextIndex = conflictIndex.
+如果找不到对应冲突term的日志，那就把nextIndex设置为conflictIndex，即这个term都需要删除，所以nextIndex = conflictIndex. 
+而conflictIndex=follower里日志的conflictTerm第一个位置，就一下子删除了一个term的
+
+具体见fig7，看不懂
+如果term不同的话，假设leader的term大那么结果肯定是回溯，而且一直是回溯到term的起始index，所以减小了回溯次数
+而假设leader的term小，则此时leader一定不存在目标follower的term，所以结果不变。。还是回溯

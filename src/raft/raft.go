@@ -1,7 +1,7 @@
 package raft
 
 //todo batchsize选择
-//fixme matchIndex更新
+//todo backward opt
 
 import (
 	"math/rand"
@@ -20,7 +20,7 @@ const MaxElectionInterval = time.Duration(400) * time.Millisecond
 const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
 const RpcTimeout = time.Duration(200) * time.Millisecond
 const MinElectionTimeoutInterval = 250
-const CommitAgreeTimeout = time.Duration(200) * time.Millisecond //一次日志添加的超时时间
+const CommitAgreeTimeout = time.Duration(100) * time.Millisecond //一次日志添加的超时时间
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -388,10 +388,8 @@ func (rf *Raft) initLeader() {
 	rf.leaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
-	rf.backwardBase = make([]int, rf.n)
 	SetArrayValue(rf.nextIndex, len(rf.log))
 	SetArrayValue(rf.matchIndex, -1)
-	SetArrayValue(rf.backwardBase, 1)
 	rf.mu.Unlock()
 
 	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
@@ -548,6 +546,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = -1
 	rf.lastApplied = -1
 	rf.matchIndex = make([]int, rf.n) //初始化用于leader，或者follower自己的matchIndex
+	SetArrayValue(rf.matchIndex, -1)  //必备，因为持久化后重启的时候，需要是-1
 
 	//通信
 	rf.mu = NewReentrantLock()

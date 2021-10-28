@@ -28,10 +28,20 @@ func TestGenerateNewTask(t *testing.T) {
 	rf.nextIndex = make([]int, 3)
 	rf.nextIndex[1] = 2
 	rf.matchIndex = make([]int, 3)
-	rf.backwardBase = make([]int, 3)
 	rf.matchIndex[1] = 1
 	rf.log = []LogEntry{{}, {}, {}, {}, {}, {}, {}}
 	rf.generateNewTask(1, true, false)
+}
+
+func TestBackward(t *testing.T) {
+	rf := &Raft{}
+	rf.me = 0
+	rf.n = 3
+	rf.nextIndex = make([]int, 3)
+	rf.nextIndex[1] = 3
+	rf.log = []LogEntry{{1, -1, nil}, {1, 0, 1}, {1, 1, 2},
+		{1, 2, 3}, {1, 3, 4}, {1, 4, 5}}
+	rf.backward(1, &AppendEntriesReply{ConflictIndex: 2, ConflictTerm: -1})
 }
 
 //their tests
@@ -442,7 +452,8 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 4) % servers)
 
 	// submit lots of commands that won't commit
-	for i := 0; i < 50; i++ {
+	testSize := 50
+	for i := 0; i < testSize; i++ {
 		cfg.rafts[leader1].Start(rand.Int())
 	}
 
@@ -457,7 +468,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 4) % servers)
 
 	// lots of successful commands to new group.
-	for i := 0; i < 50; i++ {
+	for i := 0; i < testSize; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
 
@@ -470,7 +481,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect(other)
 
 	// lots more commands that won't commit
-	for i := 0; i < 50; i++ {
+	for i := 0; i < testSize; i++ {
 		cfg.rafts[leader2].Start(rand.Int())
 	}
 
@@ -485,10 +496,10 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect(other)
 
 	// lots of successful commands to new group.
-	for i := 0; i < 50; i++ {
+	for i := 0; i < testSize; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
-
+	panic(1) //这里无法执行到
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
