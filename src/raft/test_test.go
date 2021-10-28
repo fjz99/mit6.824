@@ -207,7 +207,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
-	cfg.disconnect((leader + 1) % servers)
+	cfg.disconnect((leader + 1) % servers) //这个断开指的是完全掉线，和其他的都断开
 
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
@@ -270,6 +270,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting Index 2.
 	// 即这个20的command可能被删除了。。因为新的leader是缺失20的。。
+	//可能刚好leader被废黜，所以错误的报错leader2 rejected Start()
 	leader2 := cfg.checkOneLeader()
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
 	if ok2 == false {

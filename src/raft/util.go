@@ -148,7 +148,7 @@ func (rf *Raft) ChangeState(to State) {
 	}
 }
 
-func Assert(normal bool, msg string) {
+func Assert(normal bool, msg interface{}) {
 	if !normal {
 		panic(msg)
 	}

@@ -1,9 +1,8 @@
 package raft
 
-//todo 日志提交的时候，刚被选举为leader的节点会发送空entry，此时可能会和第一轮心跳冲突，不过无所谓
 //todo batchsize选择
-//todo 重构，继续从0开始，但是nil没有index，或者for循环，检验nil
-//todo 解决办法，Index字段保存的是真正的Index，而服务器内部，仍然使用0下标开始+数组index进行复制
+//fixme 2A，节点选举的超时是bug！
+//todo 奇怪的死锁，88.log,关联的是没有disconnect的那个节点！
 
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -61,6 +60,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 		if s == FOLLOWER {
 			continue
 		}
+		//Debug(dTrace, prefix+"对 S%d 发送请求 %#v 进入临界区！", rf.me, peerIndex, peerIndex, task.args)
 
 		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
@@ -89,8 +89,8 @@ func (rf *Raft) messageSender(peerIndex int) {
 			func(rf *Raft, result interface{}) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-
 				ok := result.(bool)
+
 				if !ok {
 					Debug(dLog2, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
 					counter++
@@ -104,6 +104,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 						}
 					} else {
 						counter = 0
+						Debug(dLog2, prefix+"对 S%d 发送请求 %#v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.args)
 					}
 				} else {
 					Debug(dLog2, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
@@ -350,10 +351,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//fuckIndex := rf.log[rf.commitIndex].Index + 1
 	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,返回logindex=%d,修正后为 %d",
 		rf.me, rf.commitIndex, thisIndex, localLastLog.Index+1)
-	return localLastLog.Index + 1, rf.term, rf.state == LEADER //index从一开始，所以返回+1
+	Assert(rf.state == LEADER, "")
+	return localLastLog.Index + 1, rf.term, true //index从一开始，所以返回+1
 }
 
 //
@@ -569,7 +570,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}
 	rf.rpcTimeout = RpcTimeout //Rpc timeout要短一些
-	rf.stateChanging = make(chan *ChangedState)
 	rf.ResetTimer()
 
 	for i := 0; i < rf.n; i++ {

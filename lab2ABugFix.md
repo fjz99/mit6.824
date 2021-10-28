@@ -44,3 +44,5 @@ which will result in you granting the vote!
 31. Remember, however, that leader election may require multiple rounds in case of a split vote 
 (which can happen if packets are lost or if candidates unluckily choose the same random backoff times). 
 即，guide说了，不用重试投票请求！，只需要多轮投票就行！
+32. 之前一直有超时的问题，其实本质上是死锁了，死锁在同步队列了，我记得我改了rf.stateChanging，但是忘了删除旧的。。，所以就覆盖了，最后还是同步队列。。
+艹
