@@ -1,24 +1,7 @@
 package raft
 
 //todo batchsize选择
-//fixme 2A，节点选举的超时是bug！
-//todo 奇怪的死锁，88.log,关联的是没有disconnect的那个节点！
-
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(Command interface{}) (Index, Term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (Term, isLeader)
-//   ask a Raft for its current Term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
-//
+//fixme matchIndex更新
 
 import (
 	"math/rand"
@@ -311,6 +294,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	//开始广播
 	Debug(dCommit, "广播日志 %#v", rf.me, rf.getLastLog())
+	Debug(dCommit, "广播日志 此时leader的log为 %#v", rf.me, rf.log)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			Debug(dCommit, "对 S%d发送日志", rf.me, i)
@@ -353,8 +337,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,返回logindex=%d,修正后为 %d",
 		rf.me, rf.commitIndex, thisIndex, localLastLog.Index+1)
-	Assert(rf.state == LEADER, "")
-	return localLastLog.Index + 1, rf.term, true //index从一开始，所以返回+1
+
+	//Assert(rf.state == LEADER, "") //todo ????????
+	//完全可能被修改了，毕竟不是整体的锁
+	return localLastLog.Index + 1, rf.term, rf.state == LEADER //index从一开始，所以返回+1
 }
 
 //
@@ -561,6 +547,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//commit
 	rf.commitIndex = -1
 	rf.lastApplied = -1
+	rf.matchIndex = make([]int, rf.n) //初始化用于leader，或者follower自己的matchIndex
 
 	//通信
 	rf.mu = NewReentrantLock()

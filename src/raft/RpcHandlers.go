@@ -91,7 +91,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			thisLog = rf.log[args.PrevLogIndex]
 			//Assert(thisLog.Term <= args.PrevLogTerm, "") //否则不会选举为leader，其实不是的。。严格按照fig2来，直接判断相等即可
-			//todo 此时的index是多少？？!!!
 
 			if thisLog.Term != args.PrevLogTerm {
 				exists = false
@@ -130,10 +129,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.log = []LogEntry{}
 			rf.log = Copy(rf.log, temp[:mismatchIndex])
 			Debug(dTrace, "删除结果为 %#v", rf.me, rf.log)
+
 			//2.复制日志
 			for i := leaderLogIndex; i < len(leaderLog); i++ {
 				rf.log = append(rf.log, leaderLog[i])
 			}
+
+			//删除的情况下，结尾就是新的matchIndex
+			rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], len(rf.log)-1)
+			Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 		} else {
 			//匹配不到，查看是到达哪个边界了
 			if followerLogIndex == len(followerLog) {
@@ -142,8 +146,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				for i := leaderLogIndex; i < len(leaderLog); i++ {
 					rf.log = append(rf.log, leaderLog[i])
 				}
+
+				//追加的情况下，结尾就是新的matchIndex
+				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], len(rf.log)-1)
+				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			} else {
 				Debug(dCommit, "WARN:这次日志复制中，leader S%d 发送的日志是follower日志的子集！", rf.me, rf.leaderId)
+
+				//子集的情况下，子集的结尾才是新的matchIndex！！！
+				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], args.PrevLogIndex+len(args.Log))
+				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			}
 		}
 		Debug(dCommit, "我日志复制的结果为 %#v", rf.me, rf.log)

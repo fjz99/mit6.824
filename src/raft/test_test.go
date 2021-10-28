@@ -414,7 +414,7 @@ func TestRejoin2B(t *testing.T) {
 	cfg.disconnect(leader2)
 
 	// old leader connected again
-	cfg.connect(leader1)
+	cfg.connect(leader1) //fixme 这一步错误了
 
 	cfg.one(104, 2, true)
 

@@ -122,8 +122,10 @@ func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
 }
 
 func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
-	Debug(dTrace, "进入FollowerUpdateCommitIndex", rf.me)
-	c := Min(LeaderCommit, len(rf.log)-1) //follower就不用唤醒cond了
+	myMatchIndex := rf.matchIndex[rf.me]
+	Debug(dTrace, "进入FollowerUpdateCommitIndex,matchIndex=%d,commitId=%d,leaderCommit=%d", rf.me,
+		myMatchIndex, rf.commitIndex, LeaderCommit)
+	c := Min(LeaderCommit, myMatchIndex) //follower就不用唤醒cond了
 	//注意空entry就不用apply了。。
 	for i := rf.commitIndex + 1; i <= c; i++ {
 		rf.ApplyMsg2B(&rf.log[i], i)
@@ -140,6 +142,10 @@ func (rf *Raft) ChangeState(to State) {
 	if from := rf.state; from != to {
 		if to == LEADER {
 			rf.leaderId = rf.me
+		}
+		if to == FOLLOWER {
+			rf.matchIndex[rf.me] = rf.commitIndex
+			Debug(dInfo, "状态转换为follower，所以初始化matchIndex=commitId=%d", rf.commitIndex)
 		}
 		rf.state = to
 		//这个chan太容易死锁了
