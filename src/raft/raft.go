@@ -61,8 +61,12 @@ func (rf *Raft) messageSender(peerIndex int) {
 		if s == FOLLOWER {
 			continue
 		}
+
 		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+
 				Debug(dLog2, prefix+"rpc请求超时%#v", rf.me, peerIndex, task.args)
 				counter++
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
@@ -83,6 +87,9 @@ func (rf *Raft) messageSender(peerIndex int) {
 				return endpoint.Call(task.rpcMethod, task.args, task.reply)
 			},
 			func(rf *Raft, result interface{}) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+
 				ok := result.(bool)
 				if !ok {
 					Debug(dLog2, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
@@ -555,8 +562,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = -1
 
 	//通信
-	rf.broadCastCondition = sync.NewCond(&rf.mu)
-	rf.CommitIndexCondition = sync.NewCond(&rf.mu)
+	rf.mu = NewReentrantLock()
+	rf.broadCastCondition = sync.NewCond(rf.mu)
+	rf.CommitIndexCondition = sync.NewCond(rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}

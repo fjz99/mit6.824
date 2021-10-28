@@ -67,7 +67,7 @@ type Task struct {
 }
 
 type Raft struct {
-	mu                   sync.Mutex // Lock to protect shared access to this peer's state
+	mu                   sync.Locker // Lock to protect shared access to this peer's state
 	broadCastCondition   *sync.Cond
 	CommitIndexCondition *sync.Cond //监听commitId的变化
 	agreeCounter         int        //用于统计过半机制
