@@ -1,7 +1,6 @@
 package raft
 
 //todo batchsize选择
-//todo backward opt
 
 import (
 	"math/rand"
