@@ -2,50 +2,51 @@ package raft
 
 //处理其他server的 vote rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	Debug(dVote, "接收到 S%d 的投票请求 %#v", rf.me, args.CandidateId, *args)
+	Debug(dVote, "接收到 S%d 的投票请求 %+v", rf.me, args.CandidateId, *args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//Debug(dTrace, "接收到 S%d 的投票请求 %#v,进入临界区", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区", rf.me, args.CandidateId, *args)
 
 	if args.Term < rf.term {
 		Debug(dVote, "不投票给 S%d，因为他的term=%d，小于我的%d", rf.me, args.CandidateId, args.Term, rf.term)
 		*reply = RequestVoteReply{Term: rf.term, VoteGranted: false}
 		return //!
 	}
-	//Debug(dTrace, "接收到 S%d 的投票请求 %#v,进入临界区 15行", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 15行", rf.me, args.CandidateId, *args)
 	if args.Term > rf.term {
-		//Debug(dTrace, "接收到 S%d 的投票请求 %#v,进入临界区 17行", rf.me, args.CandidateId, *args)
+		//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 17行", rf.me, args.CandidateId, *args)
 		rf.increaseTerm(args.Term, -1)
 		Debug(dTerm, "在RequestVote RPC中 接收到 S%d 的term = %d，修改", rf.me, args.CandidateId, args.Term)
 	}
-	//Debug(dTrace, "接收到 S%d 的投票请求 %#v,进入临界区 21行", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 21行", rf.me, args.CandidateId, *args)
 	lastLog := rf.getLastLog()
 	lasLogIndex := len(rf.log) - 1
 	if rf.voteFor == -1 || rf.voteFor == args.CandidateId {
 		if args.LastLogTerm > lastLog.Term ||
 			(args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lasLogIndex) {
-			Debug(dVote, "决定投票给 S%d，因为args=%#v,lastLogIndex=%d,我的term=%d，我的voteFor=%d",
+			Debug(dVote, "决定投票给 S%d，因为args=%+v,lastLogIndex=%d,我的term=%d，我的voteFor=%d",
 				rf.me, args.CandidateId, args, lasLogIndex, rf.term, rf.voteFor)
 			rf.ResetTimer() //！！
 			rf.voteFor = args.CandidateId
+			rf.persist()
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: true}
 		} else {
-			Debug(dVote, "拒绝给S%d投票,因为args=%#v,lastLogIndex=%d", rf.me, args.CandidateId, args, lasLogIndex)
+			Debug(dVote, "拒绝给S%d投票,因为args=%+v,lastLogIndex=%d", rf.me, args.CandidateId, args, lasLogIndex)
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: false}
 		}
 	} else {
 		Debug(dVote, "已经决定投票给 S%d 了，故拒绝S%d的投票", rf.me, rf.voteFor, args.CandidateId)
 		*reply = RequestVoteReply{Term: rf.term, VoteGranted: false}
 	}
-	Debug(dVote, "返回 S%d的 RequestVote RPC 为 %#v", rf.me, args.CandidateId, *reply)
+	Debug(dVote, "返回 S%d的 RequestVote RPC 为 %+v", rf.me, args.CandidateId, *reply)
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	Assert(args.LeaderId != rf.me, "")
-	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %#v", rf.me, args.LeaderId, *args)
+	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v", rf.me, args.LeaderId, *args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %#v 进入临界区！！！", rf.me, args.LeaderId, *args)
+	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v 进入临界区！！！", rf.me, args.LeaderId, *args)
 
 	if args.Term < rf.term {
 		Debug(dInfo, "接收到 leader:S%d 的 Term = %d,忽略", rf.me, args.LeaderId, args.Term)
@@ -78,7 +79,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		*reply = AppendEntriesReply{Term: rf.term, Success: true}
 	} else {
-		Debug(dCommit, "接收到 leader:S%d 日志log rpc,leader=%#v,follower=%#v", rf.me, args.LeaderId, *args, rf.log)
+		Debug(dCommit, "接收到 leader:S%d 日志log rpc,leader=%+v,follower=%+v", rf.me, args.LeaderId, *args, rf.log)
 
 		//检查日志索引位置是否存在
 		exists := true
@@ -109,12 +110,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		if !exists {
 			//实行backward优化
-			Debug(dCommit, "没！找到log数组中对应的前驱位置，rpc 参数为 %#v,rpc handler返回", rf.me, *args)
+			Debug(dCommit, "没！找到log数组中对应的前驱位置，rpc 参数为 %+v,rpc handler返回", rf.me, *args)
 			Debug(dCommit, "conflictIndex=%d,conflictTerm=%d", rf.me, conflictIndex, conflictTerm)
 			*reply = AppendEntriesReply{Term: rf.term, Success: false, ConflictIndex: conflictIndex, ConflictTerm: conflictTerm}
 			return
 		}
-		Debug(dCommit, "找到了log数组中对应的前驱位置，entry为 %#v", rf.me, thisLog)
+		Debug(dCommit, "找到了log数组中对应的前驱位置，entry为 %+v", rf.me, thisLog)
 		//复制
 		mismatchIndex := -1
 		followerLogIndex := args.PrevLogIndex + 1
@@ -125,7 +126,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//1.查找mismatch的地方，然后执行删除
 		for leaderLogIndex < len(leaderLog) && followerLogIndex < len(followerLog) {
 			if leaderLog[leaderLogIndex].Term != followerLog[followerLogIndex].Term {
-				Debug(dCommit, "找到了log数组中第一个不匹配的位置，entry为 leader=%#v，follower=%#v",
+				Debug(dCommit, "找到了log数组中第一个不匹配的位置，entry为 leader=%+v，follower=%+v",
 					rf.me, leaderLog[leaderLogIndex], followerLog[followerLogIndex])
 				mismatchIndex = followerLogIndex
 				break
@@ -140,7 +141,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			temp := rf.log
 			rf.log = []LogEntry{}
 			rf.log = Copy(rf.log, temp[:mismatchIndex])
-			Debug(dTrace, "删除结果为 %#v", rf.me, rf.log)
+			Debug(dTrace, "删除结果为 %+v", rf.me, rf.log)
 
 			//2.复制日志
 			for i := leaderLogIndex; i < len(leaderLog); i++ {
@@ -170,12 +171,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			}
 		}
-		Debug(dCommit, "我日志复制的结果为 %#v", rf.me, rf.log)
+		Debug(dCommit, "我日志复制的结果为 %+v", rf.me, rf.log)
 
 		rf.FollowerUpdateCommitIndex(args.LeaderCommit)
 
 		//获得返回值
 		Debug(dCommit, "日志复制完成", rf.me)
+		rf.persist()
 		*reply = AppendEntriesReply{Term: rf.term, Success: true, ConflictIndex: -1, ConflictTerm: -1}
 	}
 }

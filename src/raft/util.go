@@ -114,7 +114,7 @@ func (rf *Raft) getLastLogOf(index int) LogEntry {
 func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
 	//nil代表是空entry
 	if thisEntry.Command != nil {
-		Debug(dCommit, "发送测试数据 command=%#v，内部index=%d 修正index=%d", rf.me, thisEntry.Command, index, thisEntry.Index+1)
+		Debug(dCommit, "发送测试数据 command=%+v，内部index=%d 修正index=%d", rf.me, thisEntry.Command, index, thisEntry.Index+1)
 		rf.applyCh <- ApplyMsg{CommandValid: true, Command: thisEntry.Command, CommandIndex: thisEntry.Index + 1} //index从一开始，所以返回+1
 	} else {
 		Debug(dCommit, "因为cmd=nil不发送测试数据", rf.me)
@@ -169,8 +169,9 @@ func SetArrayValue(arr []int, v int) {
 func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Assert(rf.term < newTerm, "")
 	rf.voteFor = -1 //重置
-	rf.leaderId = leaderId
 	rf.term = newTerm
+	rf.persist()
+	rf.leaderId = leaderId
 	rf.ChangeState(FOLLOWER)
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
@@ -183,7 +184,7 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 	temp[rf.me] = len(rf.log) - 1
 	//逆序排序
 	sort.Sort(sort.Reverse(sort.IntSlice(temp))) //.......
-	Debug(dCommit, "LeaderUpdateCommitIndex matchIndex逆序排序的结果为 %#v ", rf.me, temp)
+	Debug(dCommit, "LeaderUpdateCommitIndex matchIndex逆序排序的结果为 %+v ", rf.me, temp)
 	maxIndex := temp[rf.n/2]
 	Debug(dCommit, "LeaderUpdateCommitIndex 选择的过半最小matchIndex=%d", rf.me, maxIndex)
 	if maxIndex > rf.commitIndex {
@@ -198,7 +199,7 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 
 			rf.commitIndex = maxIndex
 			rf.CommitIndexCondition.Broadcast()
-			Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%#v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
+			Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%+v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
 		} else {
 			Debug(dCommit, "最大的过半matchIndex为%d，但是term为%d，而leader term为%d，所以放弃更新commitId",
 				rf.me, maxIndex, rf.log[maxIndex].Term, rf.term)
@@ -249,7 +250,7 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 	}
 	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 		args, &AppendEntriesReply{}, "Raft.AppendEntries"}
-	Debug(dCommit, "生成 S%d 新的任务 %#v", rf.me, peerIndex, *args)
+	Debug(dCommit, "生成 S%d 新的任务 %+v", rf.me, peerIndex, *args)
 }
 
 //根据match进行回退,

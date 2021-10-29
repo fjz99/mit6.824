@@ -3,6 +3,8 @@ package raft
 //todo batchsize选择
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"math/rand"
 	//	"bytes"
 	"sync"
@@ -34,7 +36,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 		task := <-ch
 		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
 
-		Debug(dLog2, prefix+"对 S%d 发送请求 %#v", rf.me, peerIndex, peerIndex, task.args)
+		Debug(dLog2, prefix+"对 S%d 发送请求 %+v", rf.me, peerIndex, peerIndex, task.args)
 
 		rf.mu.Lock()
 		s := rf.state
@@ -42,14 +44,14 @@ func (rf *Raft) messageSender(peerIndex int) {
 		if s == FOLLOWER {
 			continue
 		}
-		//Debug(dTrace, prefix+"对 S%d 发送请求 %#v 进入临界区！", rf.me, peerIndex, peerIndex, task.args)
+		//Debug(dTrace, prefix+"对 S%d 发送请求 %+v 进入临界区！", rf.me, peerIndex, peerIndex, task.args)
 
 		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 
-				Debug(dLog2, prefix+"rpc请求超时%#v", rf.me, peerIndex, task.args)
+				Debug(dLog2, prefix+"rpc请求超时%+v", rf.me, peerIndex, task.args)
 				counter++
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
 				if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
@@ -57,7 +59,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 						Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
 					} else {
 						ch <- task
-						Debug(dLog2, prefix+"rpc请求超时%#v,重试!!", rf.me, peerIndex, task.args)
+						Debug(dLog2, prefix+"rpc请求超时%+v,重试!!", rf.me, peerIndex, task.args)
 					}
 				} else {
 					counter = 0
@@ -74,28 +76,28 @@ func (rf *Raft) messageSender(peerIndex int) {
 				ok := result.(bool)
 
 				if !ok {
-					Debug(dLog2, prefix+"请求失败 %#v", rf.me, peerIndex, task.args)
+					Debug(dLog2, prefix+"请求失败 %+v", rf.me, peerIndex, task.args)
 					counter++
 					//这个是rpc库本身请求失败
 					if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
 						if rf.state == FOLLOWER {
 							Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
 						} else {
-							Debug(dLog2, prefix+"请求失败%#v,重试!!", rf.me, peerIndex, task.args)
+							Debug(dLog2, prefix+"请求失败%+v,重试!!", rf.me, peerIndex, task.args)
 							ch <- task
 						}
 					} else {
 						counter = 0
-						Debug(dLog2, prefix+"对 S%d 发送请求 %#v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.args)
+						Debug(dLog2, prefix+"对 S%d 发送请求 %+v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.args)
 					}
 				} else {
-					Debug(dLog2, prefix+"返回结果 %#v", rf.me, peerIndex, task.reply)
+					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.reply)
 					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply, task)
 					counter = 0
 				}
 			})
 		if counter == 0 {
-			Debug(dLog2, prefix+"对 S%d 发送请求结束 %#v", rf.me, peerIndex, peerIndex, task.args)
+			Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.args)
 		}
 	}
 }
@@ -117,6 +119,7 @@ func (rf *Raft) broadcastVote() bool {
 	}
 	rf.term++
 	rf.voteFor = rf.me
+	rf.persist() //此方法内部没有lock
 	rf.doneRPCs = 0
 	rf.agreeCounter = 1
 	rf.leaderId = -1
@@ -125,7 +128,7 @@ func (rf *Raft) broadcastVote() bool {
 	lastLog := rf.getLastLog()
 	lastLogIndex := len(rf.log) - 1
 	args = &RequestVoteArgs{rf.term, rf.me, lastLogIndex, lastLog.Term}
-	Debug(dVote, "开始一轮选举 Term = %d req = %#v", rf.me, rf.term, *args)
+	Debug(dVote, "开始一轮选举 Term = %d req = %+v", rf.me, rf.term, *args)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			//避免多个任务访问args的竞争。。
@@ -201,16 +204,17 @@ func (rf *Raft) check() {
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
-//
+
+//即使是log数组，也可以恢复，只要过半崩溃
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.voteFor)
+	e.Encode(rf.term)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+	Debug(dPersist, "保存持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //
@@ -220,19 +224,21 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var voteFor int
+	var log []LogEntry
+	if d.Decode(&term) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&log) != nil {
+		panic("decode err")
+	} else {
+		rf.term = term
+		rf.voteFor = voteFor
+		rf.log = log
+	}
+	Debug(dPersist, "读取持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //
@@ -271,11 +277,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
-	Debug(dCommit, "state=%d 接收到日志提交请求： %#v", rf.me, rf.state, command)
+	Debug(dCommit, "state=%d 接收到日志提交请求： %+v", rf.me, rf.state, command)
 	//Assert(rf.state == LEADER, "") //只有leader才能提交
 
 	if rf.state != LEADER {
-		Debug(dCommit, "我不是leader，忽略日志提交请求： %#v", rf.me, command)
+		Debug(dCommit, "我不是leader，忽略日志提交请求： %+v", rf.me, command)
 		defer rf.mu.Unlock() //!
 		return rf.commitIndex, rf.term, false
 	}
@@ -288,12 +294,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	} else {
 		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index + 1, Command: command})
 	}
+	rf.persist()
 	thisIndex := len(rf.log) - 1
 	localLastLog := rf.log[len(rf.log)-1] //因为可能并发修改
 
 	//开始广播
-	Debug(dCommit, "广播日志 %#v", rf.me, rf.getLastLog())
-	Debug(dCommit, "广播日志 此时leader的log为 %#v", rf.me, rf.log)
+	Debug(dCommit, "广播日志 %+v", rf.me, rf.getLastLog())
+	Debug(dCommit, "广播日志 此时leader的log为 %+v", rf.me, rf.log)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
 			Debug(dCommit, "对 S%d发送日志", rf.me, i)
@@ -354,6 +361,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
+	Debug(dPersist, "服务器下线，被kill了", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
 }
 
@@ -568,6 +576,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
 	// initialize from state persisted before a crash
+	//放在这里也行，毕竟是同步执行的，而且此时ticker线程还没启动，不用加锁
 	rf.readPersist(persister.ReadRaftState())
 
 	go rf.ticker()

@@ -445,7 +445,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
-		//fmt.Printf("nCommitted: S%d %#v", i, cfg.logs[i])
+		//fmt.Printf("nCommitted: S%d %+v", i, cfg.logs[i])
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
@@ -539,7 +539,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				//fmt.Printf("检查提交是否完成，对应的nd为%dcmd为%#v\n", nd, cmd)
+				//fmt.Printf("检查提交是否完成，对应的nd为%dcmd为%+v\n", nd, cmd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
