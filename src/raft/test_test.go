@@ -141,9 +141,9 @@ func TestManyElections2A(t *testing.T) {
 		cfg.connect(i2)
 		cfg.connect(i3)
 	}
-	fmt.Printf("fuck! [Turn %d] 结束！下面开始检查只有一个leader！\n", iters-1)
+	//fmt.Printf("fuck! [Turn %d] 结束！下面开始检查只有一个leader！\n", iters-1)
 	cfg.checkOneLeader()
-	fmt.Println("fuck! 检查只有一个leader！结束！PASS！！")
+	//fmt.Println("fuck! 检查只有一个leader！结束！PASS！！")
 	cfg.end()
 }
 
@@ -233,10 +233,10 @@ func TestFailAgree2B(t *testing.T) {
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
-	fmt.Println("fuck! test ", 106)
+	//fmt.Println("fuck! test ", 106)
 	cfg.one(106, servers, true)
 	time.Sleep(RaftElectionTimeout)
-	fmt.Println("fuck! test ", 107)
+	//fmt.Println("fuck! test ", 107)
 	cfg.one(107, servers, true)
 
 	cfg.end()
@@ -454,23 +454,29 @@ func TestBackup2B(t *testing.T) {
 	// submit lots of commands that won't commit
 	testSize := 50
 	for i := 0; i < testSize; i++ {
-		cfg.rafts[leader1].Start(rand.Int())
+		//fmt.Println("TestBackup2B start")
+		cfg.rafts[leader1].Start(i)
+		//fmt.Println("TestBackup2B stop")
 	}
+	//fmt.Println("TestBackup2B stop all")
 
 	time.Sleep(RaftElectionTimeout / 2)
 
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
-
+	//fmt.Println("disconnect all")
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
+	//fmt.Println("connect ", leader1+2, leader1+3, leader1+4)
 
 	// lots of successful commands to new group.
 	for i := 0; i < testSize; i++ {
-		cfg.one(rand.Int(), 3, true)
+		//fmt.Println("lots of successful commands to new group. ",i)
+		cfg.one(i, 3, true)
 	}
+	//fmt.Println("lots of successful commands to new group done")
 
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
@@ -499,7 +505,7 @@ func TestBackup2B(t *testing.T) {
 	for i := 0; i < testSize; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
-	panic(1) //这里无法执行到
+	//panic(1) //这里无法执行到
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)

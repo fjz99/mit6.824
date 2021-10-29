@@ -219,7 +219,7 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 		return
 	}
 
-	n := 10 //10个log一个batch
+	n := 20 //10个log一个batch
 	lastLog := rf.getLastLogOf(nextIndex)
 	args := &AppendEntriesArgs{}
 

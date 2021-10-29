@@ -543,7 +543,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
-						fmt.Println("检查提交是否完成，结束，return了！")
+						//fmt.Println("检查提交是否完成，结束，return了！")
 						// and it was the Command we submitted.
 						return index
 					}

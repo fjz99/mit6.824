@@ -46,7 +46,8 @@ If leaderCommit > commitIndex, set commitIndex =
 即，是复制完成后最新的log的位置。。但是为了使心跳也能更新commitIndex，还是要维护matchIndex
 23. 如果发生网络分区的话，就会导致无线重试，而chan size有限，此时就会死锁。。所以，在重试的时候，也可以清空发送队列，
 即使把未来要提交的新任务清空了也没事，因为只要有一个发送成功，就会自动backward
-24. 加速backward的优化：
+24. 修复shell脚本中的超时问题。。这个导致了backward测试的回退莫名终止+lab2A的莫名终止
+25. 加速backward的优化：
 If a follower does not have prevLogIndex in its log, it should return with conflictIndex = len(log) and conflictTerm = None.
 如果找不到prev的index就返回conflictIndex = len(log) and conflictTerm = None.
 If a follower does have prevLogIndex in its log, but the term does not match,

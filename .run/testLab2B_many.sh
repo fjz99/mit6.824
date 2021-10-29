@@ -15,7 +15,7 @@ rm -rf failedTests
 mkdir failedTests
 
 for i in $(seq 1 "$runs"); do
-    timeout -k 2s 10s ../../.run/testLab2B.sh &
+    timeout -k 2s 100s ../../.run/testLab2B.sh &
     pid=$!
     if ! wait $pid; then
         echo '***' FAILED TESTS IN TRIAL "$i"
