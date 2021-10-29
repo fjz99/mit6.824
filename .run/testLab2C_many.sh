@@ -15,11 +15,11 @@ rm -rf failedTests
 mkdir failedTests
 
 for i in $(seq 1 "$runs"); do
-    timeout -k 2s 100s ../../.run/testLab2.sh &
+    timeout -k 2s 100s ../../.run/testLab2C.sh &
     pid=$!
     if ! wait $pid; then
         echo '***' FAILED TESTS IN TRIAL "$i"
-        cp ea.log failedTests/ea-"$i".log
+        cp ec.log failedTests/ec-"$i".log
     else
         echo '***' SUCCESS IN TRIAL "$i"
     fi

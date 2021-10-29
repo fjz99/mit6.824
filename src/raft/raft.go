@@ -158,9 +158,9 @@ func (rf *Raft) broadcastVote() bool {
 		rf.ChangeState(LEADER)
 		rf.leaderId = rf.me
 
-		//init有锁,所以异步执行，这样此函数返回后，init就能执行
+		//同步执行init，保证一定可以初始化matchIndex等数组
 		//start第一个条日志的时候，也依赖于LEADER状态
-		go rf.initLeader()
+		rf.initLeader()
 
 		return true
 	} else {
@@ -382,23 +382,21 @@ func (rf *Raft) broadCastHeartBeat() {
 
 func (rf *Raft) initLeader() {
 	Debug(dLeader, "开始leader初始化!", rf.me)
-	//细粒度锁
-	rf.mu.Lock()
+
 	rf.leaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
 	SetArrayValue(rf.nextIndex, len(rf.log))
 	SetArrayValue(rf.matchIndex, -1)
-	rf.mu.Unlock()
 
-	//不用一直持续广播，见fig.2，暂时广播一整个超时时间
 	//todo 心跳检测等待结果，决定是否主动降级
-	//rf.broadCastHeartBeat()
-	rf.Start(nil) //空entry，这个可以替代broadCastHeartBeat
+	//rf.broadCastHeartBeat() //只需要广播一次即可
 
-	rf.mu.Lock()
-	Debug(dLeader, "init leader done!", rf.me)
-	rf.mu.Unlock()
+	//异步执行，否则会死锁
+	//空entry，这个可以替代broadCastHeartBeat
+	go rf.Start(nil) //这个自带心跳广播的功能
+
+	Debug(dLeader, "init leader done!nil start已提交，但是可能没执行完", rf.me)
 }
 
 //也要负责和状态转换有关的属性设置
