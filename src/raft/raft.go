@@ -1,7 +1,5 @@
 package raft
 
-//todo batchsize选择
-
 import (
 	"6.824/labgob"
 	"bytes"
@@ -14,6 +12,9 @@ import (
 	//	"6.824/labgob"
 	"6.824/labrpc"
 )
+
+//todo batchsize选择
+//fixme 持久化设计的有问题，把restart注释掉就好使了
 
 const ChannelSize = 10
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
@@ -209,8 +210,8 @@ func (rf *Raft) check() {
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(rf.voteFor)
 	e.Encode(rf.term)
+	e.Encode(rf.voteFor) //注意这两个是有顺序的，，毕竟是成为byte数组。。
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -578,6 +579,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	//放在这里也行，毕竟是同步执行的，而且此时ticker线程还没启动，不用加锁
 	rf.readPersist(persister.ReadRaftState())
+	if rf.voteFor == rf.me {
+		rf.increaseTerm(rf.term+1, -1)
+	}
 
 	go rf.ticker()
 
