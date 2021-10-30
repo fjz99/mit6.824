@@ -14,16 +14,13 @@ import (
 )
 
 //todo batchsize选择
-//fixme 37s，cpu时间只有2s
-//todo 心跳甚至可以通过回调函数发送，如果一直收不到日志提交的话
 
-const ChannelSize = 100
+const ChannelSize = 10
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
-const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
-const RpcTimeout = time.Duration(200) * time.Millisecond
+const EnableCheckThread = false                          //启动周期检查,todo 测试时别忘了关闭。。
+const RpcTimeout = time.Duration(300) * time.Millisecond //事实上可以不自己设置超时时间也能通过
 const MinElectionTimeoutInterval = 250
-const CommitAgreeTimeout = time.Duration(100) * time.Millisecond //一次日志添加的超时时间
-const BatchSize = 20                                             //20个log一个batch
+const BatchSize = 30 //20个log一个batch
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -59,7 +56,6 @@ func (rf *Raft) messageSender(peerIndex int) {
 				task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply)
 			},
 			func() interface{} {
-				//fixme 这里会data race，但是没法加锁，因为这个调用很慢
 				//每次调用这个，使用的都是不同的Task对象，所以不会data race
 				return endpoint.Call(task.RpcMethod, task.Args, task.Reply)
 			},
@@ -81,11 +77,6 @@ func (rf *Raft) messageSender(peerIndex int) {
 	}
 }
 
-//广播，然后收集等待过半返回，指定超时时间
-//日志复制的一种实现就是，区分传播轮次，每次广播的目标都是复制到leader的最新id，只要接收到过半就返回，此时可能还有发送线程在补日志，但是没事，只会影响下一轮次
-//这也不会影响心跳，因为appendEntriesRPC只要不是term问题，都可以更新lastAccessTime，所以心跳可以理解为会话超时
-
-//返回值为选举结束
 //Candidate
 func (rf *Raft) broadcastVote() bool {
 	//Debug(dVote, "调用 broadcastVote", rf.me)
@@ -151,8 +142,6 @@ func (rf *Raft) broadcastVote() bool {
 	}
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -179,11 +168,6 @@ func (rf *Raft) check() {
 	time.Sleep(time.Duration(2) * time.Second)
 }
 
-//
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-
 //即使是log数组，也可以恢复，只要过半崩溃
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
@@ -196,9 +180,6 @@ func (rf *Raft) persist() {
 	Debug(dPersist, "保存持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
-//
-// restore previously persisted state.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
@@ -240,28 +221,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-//
-// the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next Command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
-// agreement and return immediately. there is no guarantee that this
-// Command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
-//
-// the first return value is the Index that the Command will appear at
-// if it's ever committed. the second return value is the current
-// Term. the third return value is true if this server believes it is
-// the leader.
-//
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	Debug(dCommit, "state=%d 接收到日志提交请求： %+v", rf.me, rf.state, command)
-	//Assert(rf.state == LEADER, "") //只有leader才能提交
 
 	if rf.state != LEADER {
 		Debug(dCommit, "我不是leader，忽略日志提交请求： %+v", rf.me, command)
-		defer rf.mu.Unlock() //!
 		return rf.commitIndex, rf.term, false
 	}
 
@@ -300,32 +266,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 		}
 	}
-	rf.mu.Unlock()
-
-	rf.TimedWait(CommitAgreeTimeout, func(rf *Raft) {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		Debug(dCommit, "日志index=%d提交超时,失败！此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
-	}, func() interface{} {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		for rf.commitIndex < thisIndex {
-			rf.CommitIndexCondition.Wait()
-			Debug(dCommit, "接收到commitId修改的广播，check", rf.me)
-			Debug(dCommit, "我要的index=%d但是commitId=%d", rf.me, thisIndex, rf.commitIndex)
-		}
-		return rf.commitIndex
-	}, func(rf *Raft, result interface{}) {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		Debug(dCommit, "日志index=%d提交成功，此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
-
-		//广播commitId,go 防止死锁，因为defer
-		//go rf.broadCastHeartBeat() //这个需要吗？
-	})
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,返回logindex=%d,修正后为 %d",
 		rf.me, rf.commitIndex, thisIndex, localLastLog.Index+1)
@@ -334,17 +274,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return localLastLog.Index + 1, rf.term, rf.state == LEADER //index从一开始，所以返回+1
 }
 
-//
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a logInitLock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
-//
 func (rf *Raft) Kill() {
 	Debug(dPersist, "服务器下线，被kill了", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
@@ -394,7 +323,6 @@ func (rf *Raft) initLeader() {
 	Debug(dLeader, "init leader done!nil start已提交，但是可能没执行完", rf.me)
 }
 
-//也要负责和状态转换有关的属性设置
 func (rf *Raft) processLeader() {
 	Debug(dInfo, "主循环进入 Leader", rf.me)
 	select {
@@ -422,9 +350,8 @@ func (rf *Raft) processLeader() {
 }
 
 func (rf *Raft) processFollower() {
-	//超时检查
 	Debug(dInfo, "主循环进入 follower", rf.me)
-	//等待状态转换或者超时
+
 	select {
 	case states := <-rf.stateChanging:
 		{
@@ -464,10 +391,6 @@ func (rf *Raft) processCandidate() {
 			if states.to == FOLLOWER {
 				rf.cleanupSenderChannel()
 			}
-			//if states.to == LEADER {
-			//变成leader了
-			//rf.initLeader() //同步的
-			//}
 			rf.mu.Unlock()
 			break
 		}
@@ -506,17 +429,6 @@ func (rf *Raft) ticker() {
 	}
 }
 
-//
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
-//
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 
