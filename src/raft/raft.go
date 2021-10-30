@@ -19,13 +19,12 @@ import (
 //fixme datarace
 //fixme limit on 8128 simultaneously alive goroutines is exceeded, dying
 
-const ChannelSize = 10
+const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
-const MaxElectionInterval = time.Duration(400) * time.Millisecond
 const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
 const RpcTimeout = time.Duration(200) * time.Millisecond
 const MinElectionTimeoutInterval = 250
-const CommitAgreeTimeout = time.Duration(100) * time.Millisecond //一次日志添加的超时时间
+const CommitAgreeTimeout = time.Duration(80) * time.Millisecond //一次日志添加的超时时间
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -43,7 +42,10 @@ func (rf *Raft) messageSender(peerIndex int) {
 		rf.mu.Lock()
 		s := rf.state
 		rf.mu.Unlock()
-		if s == FOLLOWER {
+		if s == FOLLOWER ||
+			(s == CANDIDATE && task.RpcMethod == "Raft.AppendEntries") ||
+			(s == LEADER && task.RpcMethod != "Raft.AppendEntries") {
+			Debug(dLog2, prefix+"拒绝发送任务，当前state=%d，任务rpc为：%s", rf.me, peerIndex, s, task.RpcMethod)
 			continue
 		}
 		//Debug(dTrace, prefix+"对 S%d 发送请求 %+v 进入临界区！", rf.me, peerIndex, peerIndex, task.Args)
@@ -304,8 +306,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			prev, prevIndex := rf.getLastLastLog()
 			args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prevIndex,
 				prev.Term, rf.commitIndex, rf.me}
-			rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
-				args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+			//task := &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+			//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+			if command == nil {
+				//对应刚开始，matchIndex=-1
+				rf.cleanupSenderChannelFor(i)
+				rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+			} else {
+				rf.cleanupSenderChannelFor(i)
+				//根据matchIndex生成任务
+				rf.generateNewTask(i, true, true)
+			}
+			//rf.checkSenderChannelTask(i, task)
+			//rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+			//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 		}
 	}
 	rf.mu.Unlock()

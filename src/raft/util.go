@@ -213,19 +213,20 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 //生成新任务,策略是根据lastSuccess的情况
 //如果上次成功了的话，就可以多弄一些，因为已经清楚冲突了,batch需要合适，太大了的话，丢包损失大
 //如果上次失败了的话，就以回退为主，log取1个
-//todo unit test
 func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bool) {
 	nextIndex := rf.nextIndex[peerIndex]
 	Assert(nextIndex <= len(rf.log), "")
 
 	if nextIndex == len(rf.log) {
 		Debug(dCommit, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
+		//todo 如果没有任务生成的话，就等待在cond上，即只需要leader启动一次nil，后面都不需要给chan添加任务了
 		return
 	}
 
-	n := 20 //10个log一个batch
+	n := 20 //20个log一个batch
 	lastLog := rf.getLastLogOf(nextIndex)
 	args := &AppendEntriesArgs{}
+	lastSuccess = true //忽略
 
 	if lastSuccess {
 		//归零
@@ -244,12 +245,8 @@ func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bo
 			lastLog.Term, rf.commitIndex, rf.me}
 	}
 
-	//
 	if clearChannel {
-		for len(rf.senderChannel[peerIndex]) > 0 {
-			_ = <-rf.senderChannel[peerIndex]
-		}
-		Debug(dCommit, "生成 S%d 新的任务前，先清除队列中的任务", rf.me, peerIndex)
+		rf.cleanupSenderChannelFor(peerIndex)
 	}
 	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 		args, &AppendEntriesReply{}, "Raft.AppendEntries"}
@@ -281,6 +278,54 @@ func (rf *Raft) backward(peerIndex int, reply *AppendEntriesReply) {
 		Debug(dCommit, "找到了follower的ConflictTerm=%d,所以设置nextIndex=这个term的下一个term的第一个index=%d",
 			rf.me, reply.ConflictTerm, ci)
 	}
+	//不过这种情况似乎不会发生。。
+	if rf.nextIndex[peerIndex] <= rf.matchIndex[peerIndex] {
+		Debug(dCommit, "WARN：回退nextIndex %d 的时候，竟然小于等于MatchIndex %d 了！修正为macthIndex+1!",
+			rf.me, rf.nextIndex[peerIndex], rf.matchIndex[peerIndex])
+		rf.nextIndex[peerIndex] = rf.matchIndex[peerIndex] + 1
+	}
+}
+
+//判断task是否有意义
+func (rf *Raft) TaskImportance(peerIndex int, a *Task) bool {
+	if a.RpcMethod != "Raft.AppendEntries" {
+		return false
+	}
+	args := a.Args.(*AppendEntriesArgs)
+	//是心跳
+	if args.Log == nil {
+		return false
+	}
+	//无意义的任务,都做完了
+	if args.PrevLogIndex+len(args.Log) <= rf.matchIndex[peerIndex] {
+		return false
+	} else {
+		return true
+	}
+}
+
+//checkTask,检查目前这个队列中的任务，只保留最小prevIndex的，去除心跳，因为有新任务来了
+func (rf *Raft) checkSenderChannelTask(peerIndex int, newTask *Task) {
+	var oldTask, minTask *Task
+	minTask = newTask
+	channel := rf.senderChannel[peerIndex]
+	//加锁，保证不race
+	for i := 0; i < len(channel)-1; i++ {
+		oldTask = <-channel
+		//忽略投票请求
+		if oldTask.RpcMethod == "Raft.AppendEntries" {
+			args := oldTask.Args.(*AppendEntriesArgs)
+			//不是心跳
+			if args.Log != nil {
+				if args.PrevLogIndex < minTask.Args.(*AppendEntriesArgs).PrevLogIndex {
+					minTask = oldTask
+					Assert(args.PrevLogTerm == minTask.Args.(*AppendEntriesArgs).PrevLogTerm, "")
+				}
+			}
+		}
+	}
+	channel <- minTask
+	Debug(dCommit, "清除发送队列%d完成，保留最小的任务 %+v", rf.me, peerIndex, *minTask.Args.(*AppendEntriesArgs))
 }
 
 func (rf *Raft) cleanupSenderChannelFor(peerIndex int) {

@@ -102,7 +102,6 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 		Debug(dCommit, "接收到S%d返回，日志复制失败,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 
-		//fixme 根据match进行回退
 		rf.generateNewTask(peerIndex, false, true)
 	}
 
