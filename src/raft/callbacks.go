@@ -1,10 +1,10 @@
 package raft
 
 //只有rpc通信是并行的
-func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
+func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//req := args.(*RequestVoteArgs
+	//req := Args.(*RequestVoteArgs
 
 	Debug(dVote, "S%d -> S%d 选举 RPC失败，不重试 state=%d", rf.me, rf.me, peerIndex, rf.state)
 	rf.doneRPCs++ //return false才这样！
@@ -16,7 +16,7 @@ func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply int
 func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//req := args.(*RequestVoteArgs)
+	//req := Args.(*RequestVoteArgs)
 	resp := reply.(*RequestVoteReply)
 	rf.doneRPCs++
 	if resp.Term > rf.term {
@@ -35,7 +35,7 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	rf.broadCastCondition.Broadcast()
 }
 
-func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
+func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc失败！", rf.me, peerIndex)
 	return false
 }
@@ -52,10 +52,19 @@ func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, repl
 	}
 }
 
-func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool {
+func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试", rf.me, peerIndex)
 	rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
-	return true
+	req := args.(*AppendEntriesArgs)
+	//重试不要通过返回true来实现，而要通过自己手动添加到chan来实现,这样就可以完成自己复制一个Task就不会完成任何冲突
+	thisArgs := &AppendEntriesArgs{req.Term, req.Log, req.PrevLogIndex,
+		req.PrevLogTerm, req.LeaderCommit, req.LeaderId}
+
+	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback,
+		appendEntriesRpcSuccessCallback, thisArgs, &AppendEntriesReply{}, "Raft.AppendEntries"}
+	return false
 }
 
 func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {

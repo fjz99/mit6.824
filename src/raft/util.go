@@ -1,9 +1,12 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -299,16 +302,17 @@ func (rf *Raft) cleanupSenderChannel() {
 
 func (rf *Raft) TimedWait(timeout time.Duration, timeoutCallback func(rf *Raft),
 	waitedFunction func() interface{}, timeWaitSuccessCallback func(rf *Raft, result interface{})) {
-	waitedChan := make(chan interface{})
+	waitedChan := make(chan interface{}, 1) //防止协程无法停止
 	wrapper := func() {
 		waitedChan <- waitedFunction()
 	}
 	go wrapper()
+	Debug(dTrace, "TimedWait:当前协程数量为%d", rf.me, runtime.NumGoroutine())
 
 	select {
-	case err := <-waitedChan:
+	case result := <-waitedChan:
 		{
-			timeWaitSuccessCallback(rf, err)
+			timeWaitSuccessCallback(rf, result)
 			break
 		}
 	case _ = <-time.After(timeout):
@@ -342,4 +346,13 @@ func Copy(dst, src []LogEntry) []LogEntry {
 		dst = append(dst, i)
 	}
 	return dst
+}
+
+//结构体成员变量必须是大写！否则无法拷贝成功！
+func DeepCopy(dst, src interface{}) error {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(src); err != nil {
+		return err
+	}
+	return gob.NewDecoder(bytes.NewBuffer(buf.Bytes())).Decode(dst)
 }

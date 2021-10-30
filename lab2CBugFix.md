@@ -2,3 +2,9 @@
 2. voteFor=me并不能说明现在是leader！可能是follower！
 3. log数组也需要持久化
 4. 注意持久化的时候，是生成byte数组，所以要求序列化和反序列化的顺序相同，比如都是先term再voteFor等
+5. 对于3个节点的集群而言，挂了重新start也会重新初始化超时时间，此时，就又可能出现2 1网络分区，而且2个同样的超时时间的问题，活锁，无法选举出leader e-112.log
+6. go超时处理中，发生了协程无法退出的情况，导致积压了8000个协程，最后被kill，原因见
+   https://geektutu.com/post/hpg-timeout-goroutine.html
+即超时的时候，函数退出在after中，而协程无法退出，因为chan是同步队列，还没有接受方
+   select default会在case阻塞的时候退出，所以不要用default，给chan设置容量即可，default的针对超时等待的目标线程的！
+7. 发送线程不重试海星，重试的时候会复用task对象，有非常高的概率造成datarace，解决办法，使用序列化和反序列化进行深拷贝

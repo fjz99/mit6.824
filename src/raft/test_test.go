@@ -33,6 +33,19 @@ func TestGenerateNewTask(t *testing.T) {
 	rf.generateNewTask(1, true, false)
 }
 
+func TestDeepCopy(t *testing.T) {
+	args := &AppendEntriesArgs{}
+	reply := &AppendEntriesReply{}
+	task := &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback, args,
+		reply, "xxx"}
+	var newTask Task
+	DeepCopy(newTask, *task)
+	task.Args = &AppendEntriesArgs{-1, nil, -1, -1, -1, -1}
+	newTask.Args = &AppendEntriesArgs{-2, nil, -2, -2, -2, -2}
+	fmt.Printf("%+v\n", task.Args)
+	fmt.Printf("%+v\n", newTask.Args)
+}
+
 func TestBackward(t *testing.T) {
 	rf := &Raft{}
 	rf.me = 0
@@ -679,9 +692,8 @@ func TestPersist22C(t *testing.T) {
 	cfg.begin("Test (2C): more persistence")
 
 	index := 1
-	//fixme
 	for iters := 0; iters < 5; iters++ {
-		fmt.Println("iter= ", iters)
+		//fmt.Println("iter= ", iters)
 		cfg.one(10+index, servers, true)
 		index++
 
@@ -689,34 +701,34 @@ func TestPersist22C(t *testing.T) {
 
 		cfg.disconnect((leader1 + 1) % servers)
 		cfg.disconnect((leader1 + 2) % servers)
-		fmt.Println("disconnect= ", (leader1+1)%servers, (leader1+2)%servers)
+		//fmt.Println("disconnect= ", (leader1+1)%servers, (leader1+2)%servers)
 		cfg.one(10+index, servers-2, true)
 		index++
 		cfg.disconnect((leader1 + 0) % servers)
 		cfg.disconnect((leader1 + 3) % servers)
 		cfg.disconnect((leader1 + 4) % servers)
-		fmt.Println("disconnect= ", (leader1+0)%servers, (leader1+3)%servers, (leader1+4)%servers)
+		//fmt.Println("disconnect= ", (leader1+0)%servers, (leader1+3)%servers, (leader1+4)%servers)
 
 		cfg.start1((leader1+1)%servers, cfg.applier)
 		cfg.start1((leader1+2)%servers, cfg.applier)
 		cfg.connect((leader1 + 1) % servers)
 		cfg.connect((leader1 + 2) % servers)
-		fmt.Println("connect= ", (leader1+1)%servers, (leader1+2)%servers)
-		fmt.Println("restart= ", (leader1+1)%servers, (leader1+2)%servers)
+		//fmt.Println("connect= ", (leader1+1)%servers, (leader1+2)%servers)
+		//fmt.Println("restart= ", (leader1+1)%servers, (leader1+2)%servers)
 
 		time.Sleep(RaftElectionTimeout)
 
 		cfg.start1((leader1+3)%servers, cfg.applier)
 		cfg.connect((leader1 + 3) % servers)
-		fmt.Println("connect= ", (leader1+3)%servers)
-		fmt.Println("restart= ", (leader1+3)%servers)
+		//fmt.Println("connect= ", (leader1+3)%servers)
+		//fmt.Println("restart= ", (leader1+3)%servers)
 		cfg.one(10+index, servers-2, true)
 		index++
 
 		cfg.connect((leader1 + 4) % servers)
 		cfg.connect((leader1 + 0) % servers)
-		fmt.Println("connect= ", (leader1+4)%servers, (leader1+0)%servers)
-		fmt.Println("iter= ", iters, "done!")
+		//fmt.Println("connect= ", (leader1+4)%servers, (leader1+0)%servers)
+		//fmt.Println("iter= ", iters, "done!")
 	}
 
 	cfg.one(1000, servers, true)
@@ -859,9 +871,11 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.one(rand.Int()%10000, 1, true)
 
 	nup := servers
+	//fixme
 	for iters := 0; iters < 1000; iters++ {
+		fmt.Println("iters=", iters)
 		if iters == 200 {
-			cfg.setlongreordering(true)
+			cfg.setlongreordering(true) //某些响应的delay非常长
 		}
 		leader := -1
 		for i := 0; i < servers; i++ {

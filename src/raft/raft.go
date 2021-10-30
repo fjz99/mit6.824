@@ -14,7 +14,10 @@ import (
 )
 
 //todo batchsize选择
-//fixme 持久化设计的有问题，把restart注释掉就好使了
+//fixme labgob warning: Decoding into a non-default variable/field Term may not work
+//todo 修改回溯的log也为batch
+//fixme datarace
+//fixme limit on 8128 simultaneously alive goroutines is exceeded, dying
 
 const ChannelSize = 10
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
@@ -31,13 +34,11 @@ func (rf *Raft) messageSender(peerIndex int) {
 	ch := rf.senderChannel[peerIndex]
 	endpoint := rf.peers[peerIndex]
 	prefix := "发送线程 %d "
-	counter := 0
 
 	for !rf.killed() {
 		task := <-ch
-		//t := GetNow() //控制超时，超时则会放弃执行回调,rpc库的超时最多7s，会影响下一次rpc。。
 
-		Debug(dLog2, prefix+"对 S%d 发送请求 %+v", rf.me, peerIndex, peerIndex, task.args)
+		Debug(dLog2, prefix+"对 S%d 发送请求 %+v", rf.me, peerIndex, peerIndex, task.Args)
 
 		rf.mu.Lock()
 		s := rf.state
@@ -45,31 +46,28 @@ func (rf *Raft) messageSender(peerIndex int) {
 		if s == FOLLOWER {
 			continue
 		}
-		//Debug(dTrace, prefix+"对 S%d 发送请求 %+v 进入临界区！", rf.me, peerIndex, peerIndex, task.args)
+		//Debug(dTrace, prefix+"对 S%d 发送请求 %+v 进入临界区！", rf.me, peerIndex, peerIndex, task.Args)
 
 		rf.TimedWait(rf.rpcTimeout,
 			func(rf *Raft) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 
-				Debug(dLog2, prefix+"rpc请求超时%+v", rf.me, peerIndex, task.args)
-				counter++
+				Debug(dLog2, prefix+"rpc请求超时%+v", rf.me, peerIndex, task.Args)
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
-				if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
+				if retry := task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply); retry {
 					if rf.state == FOLLOWER {
 						Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
 					} else {
 						ch <- task
-						Debug(dLog2, prefix+"rpc请求超时%+v,重试!!", rf.me, peerIndex, task.args)
+						Debug(dLog2, prefix+"rpc请求超时%+v,重试!!", rf.me, peerIndex, task.Args)
 					}
-				} else {
-					counter = 0
 				}
 			},
 			func() interface{} {
 				//fixme 这里会data race，但是没法加锁，因为这个调用很慢
-				//但是发生概率很低
-				return endpoint.Call(task.rpcMethod, task.args, task.reply)
+				//每次调用这个，使用的都是不同的Task对象，所以不会data race
+				return endpoint.Call(task.RpcMethod, task.Args, task.Reply)
 			},
 			func(rf *Raft, result interface{}) {
 				rf.mu.Lock()
@@ -77,29 +75,24 @@ func (rf *Raft) messageSender(peerIndex int) {
 				ok := result.(bool)
 
 				if !ok {
-					Debug(dLog2, prefix+"请求失败 %+v", rf.me, peerIndex, task.args)
-					counter++
+					Debug(dLog2, prefix+"请求失败 %+v", rf.me, peerIndex, task.Args)
 					//这个是rpc库本身请求失败
-					if retry := task.RpcErrorCallback(peerIndex, rf, task.args, task.reply, &counter); retry {
+					if retry := task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply); retry {
 						if rf.state == FOLLOWER {
 							Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
 						} else {
-							Debug(dLog2, prefix+"请求失败%+v,重试!!", rf.me, peerIndex, task.args)
+							Debug(dLog2, prefix+"请求失败%+v,重试!!", rf.me, peerIndex, task.Args)
 							ch <- task
 						}
 					} else {
-						counter = 0
-						Debug(dLog2, prefix+"对 S%d 发送请求 %+v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.args)
+						Debug(dLog2, prefix+"对 S%d 发送请求 %+v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.Args)
 					}
 				} else {
-					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.reply)
-					task.RpcSuccessCallback(peerIndex, rf, task.args, task.reply, task)
-					counter = 0
+					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.Reply)
+					task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task)
 				}
 			})
-		if counter == 0 {
-			Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.args)
-		}
+		Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.Args)
 	}
 }
 

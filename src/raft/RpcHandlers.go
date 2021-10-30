@@ -5,20 +5,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	Debug(dVote, "接收到 S%d 的投票请求 %+v", rf.me, args.CandidateId, *args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区", rf.me, Args.CandidateId, *Args)
 
 	if args.Term < rf.term {
 		Debug(dVote, "不投票给 S%d，因为他的term=%d，小于我的%d", rf.me, args.CandidateId, args.Term, rf.term)
 		*reply = RequestVoteReply{Term: rf.term, VoteGranted: false}
 		return //!
 	}
-	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 15行", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 15行", rf.me, Args.CandidateId, *Args)
 	if args.Term > rf.term {
-		//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 17行", rf.me, args.CandidateId, *args)
+		//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 17行", rf.me, Args.CandidateId, *Args)
 		rf.increaseTerm(args.Term, -1)
 		Debug(dTerm, "在RequestVote RPC中 接收到 S%d 的term = %d，修改", rf.me, args.CandidateId, args.Term)
 	}
-	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 21行", rf.me, args.CandidateId, *args)
+	//Debug(dTrace, "接收到 S%d 的投票请求 %+v,进入临界区 21行", rf.me, Args.CandidateId, *Args)
 	lastLog := rf.getLastLog()
 	lasLogIndex := len(rf.log) - 1
 	if rf.voteFor == -1 || rf.voteFor == args.CandidateId {
@@ -43,10 +43,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	Assert(args.LeaderId != rf.me, "")
-	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v", rf.me, args.LeaderId, *args)
+	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v", rf.me, Args.LeaderId, *Args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v 进入临界区！！！", rf.me, args.LeaderId, *args)
+	//Debug(dTrace, "接收到 leader:S%d 的AppendEntries rpc %+v 进入临界区！！！", rf.me, Args.LeaderId, *Args)
 
 	if args.Term < rf.term {
 		Debug(dInfo, "接收到 leader:S%d 的 Term = %d,忽略", rf.me, args.LeaderId, args.Term)
@@ -93,7 +93,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			conflictTerm = -1
 		} else {
 			thisLog = rf.log[args.PrevLogIndex]
-			//Assert(thisLog.Term <= args.PrevLogTerm, "") //否则不会选举为leader，其实不是的。。严格按照fig2来，直接判断相等即可
+			//Assert(thisLog.Term <= Args.PrevLogTerm, "") //否则不会选举为leader，其实不是的。。严格按照fig2来，直接判断相等即可
 
 			if thisLog.Term != args.PrevLogTerm {
 				exists = false

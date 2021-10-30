@@ -26,7 +26,7 @@ type RequestVoteArgs struct {
 }
 
 //
-// example RequestVote RPC reply structure.
+// example RequestVote RPC Reply structure.
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
@@ -57,15 +57,15 @@ type LogEntry struct {
 
 //发送线程的任务
 type Task struct {
-	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}, counter *int) bool
-	//reply 用于传指针，实现reply的初始化，完成rpc
+	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool
+	//Reply 用于传指针，实现reply的初始化，完成rpc
 	//返回值为是否重试 参数都是指针，reply需要初始化，所以如果重试的话，需要在callback中初始化
 	//这个callback会在超时或者rpc返回false时调用
 
 	RpcSuccessCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task)
-	args               interface{} //发送的内容
-	reply              interface{}
-	rpcMethod          string //rpc 方法名
+	Args               interface{} //发送的内容
+	Reply              interface{}
+	RpcMethod          string //rpc 方法名
 }
 
 type Raft struct {
