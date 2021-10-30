@@ -15,12 +15,12 @@ import (
 
 //todo batchsize选择
 
-const ChannelSize = 10
+const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
 const EnableCheckThread = false                          //启动周期检查,todo 测试时别忘了关闭。。
-const RpcTimeout = time.Duration(300) * time.Millisecond //事实上可以不自己设置超时时间也能通过
+const RpcTimeout = time.Duration(100) * time.Millisecond //事实上可以不自己设置超时时间也能通过
 const MinElectionTimeoutInterval = 250
-const BatchSize = 30 //20个log一个batch
+const BatchSize = 50 //20个log一个batch
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -70,7 +70,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 					task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply)
 				} else {
 					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.Reply)
-					go task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task)
+					go task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task) //这里因为要wait所以。。
 				}
 			})
 		Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.Args)
