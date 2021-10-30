@@ -12,10 +12,12 @@
 9. 对于不可靠的网络而言，在发送队列里需要清除无意义的任务
 每次加入发送队列时都找最有意义的
 发送线程拒绝发送不符合state的
+心跳只有在macthIndex=log len -1的时候+发送队列没数据的时候才会发送
 回退nextIndex的时候保证最少是matchIndex+1
 超时线程的chan大小设为1
 不考虑lastSuccess，无脑batch
 调整batchSize,fig8 unreliable会加快
+发送log失败重试时，额外看看有没有新的log，此时顺便也加上
 10. 回退过程只发生在leader刚被选举的时候，此时进行回退
 11. 为了解耦，发送线程只负责发送，所以校验发送任务有意义的任务，就是start的了
 对于一开始的nil而言，因为matchIndex=-1，此时不要从为matchIndex开始，因为大部分日志都是匹配的，所以要backward更好

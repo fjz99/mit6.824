@@ -150,6 +150,9 @@ func (rf *Raft) ChangeState(to State) {
 			rf.matchIndex[rf.me] = rf.commitIndex
 			Debug(dInfo, "状态转换为follower，所以初始化matchIndex=commitId=%d", rf.me, rf.commitIndex)
 		}
+		if rf.state == LEADER {
+			rf.logAppendCondition.Broadcast() //否则会出现，leader在callback中阻塞，但是leader变成follower的情况，就死锁了
+		}
 		rf.state = to
 		//这个chan太容易死锁了
 		rf.stateChanging <- &ChangedState{from, to}
@@ -180,7 +183,7 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 }
 
 //找超过半数的，办法很简单，直接排序，然后取前半数个,找到最大值，一起更新
-//注意判断term！ todo
+//注意判断term！
 func (rf *Raft) LeaderUpdateCommitIndex() {
 	temp := make([]int, len(rf.nextIndex))
 	copy(temp, rf.matchIndex)
@@ -210,47 +213,43 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 	}
 }
 
-//生成新任务,策略是根据lastSuccess的情况
-//如果上次成功了的话，就可以多弄一些，因为已经清楚冲突了,batch需要合适，太大了的话，丢包损失大
-//如果上次失败了的话，就以回退为主，log取1个
-func (rf *Raft) generateNewTask(peerIndex int, lastSuccess bool, clearChannel bool) {
+//生成新任务
+func (rf *Raft) generateNewTask(peerIndex int, clearChannel bool) *Task {
 	nextIndex := rf.nextIndex[peerIndex]
 	Assert(nextIndex <= len(rf.log), "")
+	if rf.state != LEADER {
+		return nil
+	}
 
 	if nextIndex == len(rf.log) {
-		Debug(dCommit, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
+		Debug(dTrace, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
 		//todo 如果没有任务生成的话，就等待在cond上，即只需要leader启动一次nil，后面都不需要给chan添加任务了
-		return
+		return nil
 	}
 
-	n := 20 //20个log一个batch
 	lastLog := rf.getLastLogOf(nextIndex)
 	args := &AppendEntriesArgs{}
-	lastSuccess = true //忽略
 
-	if lastSuccess {
-		//归零
-
-		var arr []LogEntry
-		if len(rf.log)-nextIndex >= n {
-			arr = Copy(arr, rf.log[nextIndex:nextIndex+n])
-		} else {
-			arr = Copy(arr, rf.log[nextIndex:])
-		}
-		args = &AppendEntriesArgs{rf.term, arr, nextIndex - 1, //因为nextIndex从0开始，所以可以保证-1
-			lastLog.Term, rf.commitIndex, rf.me}
-		Assert(len(arr) > 0, "")
+	var arr []LogEntry
+	if len(rf.log)-nextIndex >= BatchSize {
+		arr = Copy(arr, rf.log[nextIndex:nextIndex+BatchSize])
 	} else {
-		args = &AppendEntriesArgs{rf.term, []LogEntry{rf.log[nextIndex]}, nextIndex - 1,
-			lastLog.Term, rf.commitIndex, rf.me}
+		arr = Copy(arr, rf.log[nextIndex:])
 	}
+	args = &AppendEntriesArgs{rf.term, arr, nextIndex - 1, //因为nextIndex从0开始，所以可以保证-1
+		lastLog.Term, rf.commitIndex, rf.me}
+	Assert(len(arr) > 0, "")
 
 	if clearChannel {
 		rf.cleanupSenderChannelFor(peerIndex)
 	}
-	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+
+	//rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
+	//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
+
+	Debug(dTrace, "生成 S%d 新的任务 %+v", rf.me, peerIndex, *args)
+	return &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 		args, &AppendEntriesReply{}, "Raft.AppendEntries"}
-	Debug(dCommit, "生成 S%d 新的任务 %+v", rf.me, peerIndex, *args)
 }
 
 //根据match进行回退,

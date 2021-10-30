@@ -30,7 +30,7 @@ func TestGenerateNewTask(t *testing.T) {
 	rf.matchIndex = make([]int, 3)
 	rf.matchIndex[1] = 1
 	rf.log = []LogEntry{{}, {}, {}, {}, {}, {}, {}}
-	rf.generateNewTask(1, true, false)
+	//rf.generateNewTask(1, true, false)
 }
 
 func TestDeepCopy(t *testing.T) {
@@ -872,7 +872,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	nup := servers
 	//fixme
-	for iters := 0; iters < 200; iters++ {
+	for iters := 0; iters < 1000; iters++ {
 		fmt.Println("iters=", iters)
 		if iters == 200 {
 			cfg.setlongreordering(true) //某些响应的delay非常长

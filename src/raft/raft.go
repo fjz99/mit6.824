@@ -14,17 +14,16 @@ import (
 )
 
 //todo batchsize选择
-//fixme labgob warning: Decoding into a non-default variable/field Term may not work
-//todo 修改回溯的log也为batch
-//fixme datarace
-//fixme limit on 8128 simultaneously alive goroutines is exceeded, dying
+//fixme 37s，cpu时间只有2s
+//todo 心跳甚至可以通过回调函数发送，如果一直收不到日志提交的话
 
 const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
 const EnableCheckThread = false //启动周期检查,todo 测试时别忘了关闭。。
 const RpcTimeout = time.Duration(200) * time.Millisecond
 const MinElectionTimeoutInterval = 250
-const CommitAgreeTimeout = time.Duration(80) * time.Millisecond //一次日志添加的超时时间
+const CommitAgreeTimeout = time.Duration(100) * time.Millisecond //一次日志添加的超时时间
+const BatchSize = 20                                             //20个log一个batch
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -57,14 +56,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 
 				Debug(dLog2, prefix+"rpc请求超时%+v", rf.me, peerIndex, task.Args)
 				//因为rpc超时时间一定小于选举超时时间，所以就可以
-				if retry := task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply); retry {
-					if rf.state == FOLLOWER {
-						Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
-					} else {
-						ch <- task
-						Debug(dLog2, prefix+"rpc请求超时%+v,重试!!", rf.me, peerIndex, task.Args)
-					}
-				}
+				task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply)
 			},
 			func() interface{} {
 				//fixme 这里会data race，但是没法加锁，因为这个调用很慢
@@ -79,19 +71,10 @@ func (rf *Raft) messageSender(peerIndex int) {
 				if !ok {
 					Debug(dLog2, prefix+"请求失败 %+v", rf.me, peerIndex, task.Args)
 					//这个是rpc库本身请求失败
-					if retry := task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply); retry {
-						if rf.state == FOLLOWER {
-							Debug(dLog2, prefix+"state = %d,为FOLLOWER，放弃重试", rf.me, peerIndex, rf.state)
-						} else {
-							Debug(dLog2, prefix+"请求失败%+v,重试!!", rf.me, peerIndex, task.Args)
-							ch <- task
-						}
-					} else {
-						Debug(dLog2, prefix+"对 S%d 发送请求 %+v RpcErrorCallback 不重试！", rf.me, peerIndex, peerIndex, task.Args)
-					}
+					task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply)
 				} else {
 					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.Reply)
-					task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task)
+					go task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task)
 				}
 			})
 		Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.Args)
@@ -291,36 +274,30 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index + 1, Command: command})
 	}
 	rf.persist()
+	rf.logAppendCondition.Broadcast()
 	thisIndex := len(rf.log) - 1
 	localLastLog := rf.log[len(rf.log)-1] //因为可能并发修改
 
 	//开始广播
 	Debug(dCommit, "广播日志 %+v", rf.me, rf.getLastLog())
 	Debug(dCommit, "广播日志 此时leader的log为 %+v", rf.me, rf.log)
-	for i := 0; i < rf.n; i++ {
-		if i != rf.me {
-			Debug(dCommit, "对 S%d发送日志", rf.me, i)
-			if len(rf.senderChannel[i]) > 0 {
-				Debug(dCommit, "WARN:企图对S%d发送日志的时候，队列中还有别的内容等待发送len=%d", rf.me, i, len(rf.senderChannel[i]))
-			}
-			prev, prevIndex := rf.getLastLastLog()
-			args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prevIndex,
-				prev.Term, rf.commitIndex, rf.me}
-			//task := &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
-			//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
-			if command == nil {
-				//对应刚开始，matchIndex=-1
+	if command == nil {
+		//对应刚开始，matchIndex=-1,启动日志发送
+		for i := 0; i < rf.n; i++ {
+			if i != rf.me {
+				//Debug(dCommit, "对 S%d发送日志", rf.me, i)
+				if len(rf.senderChannel[i]) > 0 {
+					Debug(dCommit, "WARN:企图对S%d发送日志的时候，队列中还有别的内容等待发送len=%d", rf.me, i, len(rf.senderChannel[i]))
+				}
+
+				prev, prevIndex := rf.getLastLastLog()
+				args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prevIndex,
+					prev.Term, rf.commitIndex, rf.me}
+
 				rf.cleanupSenderChannelFor(i)
 				rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
-			} else {
-				rf.cleanupSenderChannelFor(i)
-				//根据matchIndex生成任务
-				rf.generateNewTask(i, true, true)
 			}
-			//rf.checkSenderChannelTask(i, task)
-			//rf.senderChannel[i] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
-			//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 		}
 	}
 	rf.mu.Unlock()
@@ -331,7 +308,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Debug(dCommit, "日志index=%d提交超时,失败！此时commitIndex为%d", rf.me, thisIndex, rf.commitIndex)
 	}, func() interface{} {
 		rf.mu.Lock()
-		defer rf.mu.Unlock() //todo 可能死锁
+		defer rf.mu.Unlock()
 		for rf.commitIndex < thisIndex {
 			rf.CommitIndexCondition.Wait()
 			Debug(dCommit, "接收到commitId修改的广播，check", rf.me)
@@ -353,8 +330,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	Debug(dCommit, " 日志提交请求返回，结果为 commitIndex=%d,返回logindex=%d,修正后为 %d",
 		rf.me, rf.commitIndex, thisIndex, localLastLog.Index+1)
 
-	//Assert(rf.state == LEADER, "") //todo ????????
-	//完全可能被修改了，毕竟不是整体的锁
+	//Assert(rf.state == LEADER, "") //完全可能被修改了，毕竟不是整体的锁
 	return localLastLog.Index + 1, rf.term, rf.state == LEADER //index从一开始，所以返回+1
 }
 
@@ -385,13 +361,15 @@ func (rf *Raft) broadCastHeartBeat() {
 	Debug(dLeader, "广播心跳", rf.me)
 	for i := 0; i < rf.n; i++ {
 		if i != rf.me {
-			//Debug(dLeader, "对 S%d发送心跳", rf.me, i)
-			if len(rf.senderChannel[i]) == 0 {
+			//Debug(dTrace, "对 S%d发送心跳", rf.me, i)
+
+			if len(rf.senderChannel[i]) == 0 && rf.matchIndex[i] == len(rf.log)-1 {
 				args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
 				rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
 					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 			} else {
-				Debug(dLeader, " -> S%d 发送队列中还有数据，长度为%d，所以不发送心跳", rf.me, i, len(rf.senderChannel[i]))
+				Debug(dLeader, " -> S%d 不发送心跳,此时队列长度为%d，matchIndex=%d，len of log=%d", rf.me,
+					i, len(rf.senderChannel[i]), rf.matchIndex[i], len(rf.log))
 			}
 		}
 	}
@@ -566,6 +544,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.mu = NewReentrantLock()
 	rf.broadCastCondition = sync.NewCond(rf.mu)
 	rf.CommitIndexCondition = sync.NewCond(rf.mu)
+	rf.logAppendCondition = sync.NewCond(rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
 	rf.waitGroup = sync.WaitGroup{}

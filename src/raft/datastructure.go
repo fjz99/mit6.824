@@ -57,7 +57,7 @@ type LogEntry struct {
 
 //发送线程的任务
 type Task struct {
-	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool
+	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{})
 	//Reply 用于传指针，实现reply的初始化，完成rpc
 	//返回值为是否重试 参数都是指针，reply需要初始化，所以如果重试的话，需要在callback中初始化
 	//这个callback会在超时或者rpc返回false时调用
@@ -72,6 +72,7 @@ type Raft struct {
 	mu                   sync.Locker // Lock to protect shared access to this peer's state
 	broadCastCondition   *sync.Cond
 	CommitIndexCondition *sync.Cond //监听commitId的变化
+	logAppendCondition   *sync.Cond //监听日志的添加操作
 	agreeCounter         int        //用于统计过半机制
 	doneRPCs             int        //统计完成了多少rpc
 	waitGroup            sync.WaitGroup

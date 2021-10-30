@@ -1,7 +1,7 @@
 package raft
 
 //只有rpc通信是并行的
-func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//req := Args.(*RequestVoteArgs
@@ -10,7 +10,7 @@ func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	rf.doneRPCs++ //return false才这样！
 	rf.broadCastCondition.Broadcast()
 	//rf.waitGroup.Done()
-	return false
+	return
 }
 
 func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
@@ -35,9 +35,9 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	rf.broadCastCondition.Broadcast()
 }
 
-func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc失败！", rf.me, peerIndex)
-	return false
+	return
 }
 
 //这里，假如选为leader之后，在init的地方for循环多次发送的话，因为外部加的是for循环整体的锁，而回调函数需要锁，所以阻塞了所有的回调函数，导致发送队列阻塞
@@ -52,19 +52,33 @@ func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, repl
 	}
 }
 
-func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) bool {
+func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试", rf.me, peerIndex)
-	rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
-	req := args.(*AppendEntriesArgs)
-	//重试不要通过返回true来实现，而要通过自己手动添加到chan来实现,这样就可以完成自己复制一个Task就不会完成任何冲突
-	thisArgs := &AppendEntriesArgs{req.Term, req.Log, req.PrevLogIndex,
-		req.PrevLogTerm, req.LeaderCommit, req.LeaderId}
 
-	rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback,
-		appendEntriesRpcSuccessCallback, thisArgs, &AppendEntriesReply{}, "Raft.AppendEntries"}
-	return false
+	if rf.state != LEADER {
+		return
+	}
+
+	//重试之前也要生成新的任务
+	if rf.matchIndex[peerIndex] != -1 {
+		//不是刚开始的backward阶段
+		newTask := rf.generateNewTask(peerIndex, true)
+		Assert(newTask != nil, "")
+		rf.senderChannel[peerIndex] <- newTask
+		Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试,新的日志为%+v", rf.me, peerIndex, *newTask)
+	} else {
+		rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
+		req := args.(*AppendEntriesArgs)
+		//重试不要通过返回true来实现，而要通过自己手动添加到chan来实现,这样就可以完成自己复制一个Task就不会完成任何冲突
+		thisArgs := &AppendEntriesArgs{req.Term, req.Log, req.PrevLogIndex,
+			req.PrevLogTerm, req.LeaderCommit, req.LeaderId}
+		newTask := &Task{appendEntriesRpcFailureCallback,
+			appendEntriesRpcSuccessCallback, thisArgs, &AppendEntriesReply{}, "Raft.AppendEntries"}
+		rf.senderChannel[peerIndex] <- newTask
+		Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试,日志不变，为%+v", rf.me, peerIndex, *newTask)
+	}
+	return
 }
 
 func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
@@ -95,14 +109,28 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 		//这个不要最大值。。因为初始化的时候是乐观估计，是leader的log最大值
 		Debug(dCommit, "接收到S%d返回，日志复制成功,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
-		rf.generateNewTask(peerIndex, true, true)
-		//归零
 	} else {
 		rf.backward(peerIndex, resp)
 		Debug(dCommit, "接收到S%d返回，日志复制失败,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
-
-		rf.generateNewTask(peerIndex, false, true)
 	}
 
+	newTask := rf.generateNewTask(peerIndex, true)
+	//这个阻塞过程会导致发送线程无法返回。。就导致无法广播心跳等,所以要异步执行
+	for newTask == nil {
+		if rf.state != LEADER {
+			Debug(dCommit, "等待给S%d生成任务的过程中，我被降级为state=%d了！", rf.me, peerIndex, rf.state)
+			return
+		}
+
+		//没有任务可以生成
+		Debug(dCommit, "等待给S%d生成任务，matchIndex=%d，log len=%d", rf.me, peerIndex,
+			rf.matchIndex[peerIndex], len(rf.log))
+		rf.logAppendCondition.Wait() //todo稍微等一会？当leader commit超过这个的时候，可以攒一波log
+
+		newTask = rf.generateNewTask(peerIndex, true)
+	}
+
+	Debug(dCommit, "给S%d生成任务完成，task.args=", rf.me, peerIndex, *newTask.Args.(*AppendEntriesArgs))
+	rf.senderChannel[peerIndex] <- newTask
 }
