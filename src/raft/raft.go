@@ -14,6 +14,11 @@ import (
 )
 
 //todo batchsize选择
+//todo 注意由此带来的index的改动
+//todo 不用clearChannel了，选举为leader之后clear一下就行了；心跳还是一样，有内容就不发送
+//todo 日志复制的时候，选择发送快照，然后再复制
+//todo 当创建了快照之后，leader要发送给所有的follower，使其裁剪log
+// toto 技巧把东西化为small的临时变量，最后再变回去!go
 
 const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
@@ -39,8 +44,8 @@ func (rf *Raft) messageSender(peerIndex int) {
 		s := rf.state
 		rf.mu.Unlock()
 		if s == FOLLOWER ||
-			(s == CANDIDATE && task.RpcMethod == "Raft.AppendEntries") ||
-			(s == LEADER && task.RpcMethod != "Raft.AppendEntries") {
+			(s == CANDIDATE && task.RpcMethod != "Raft.RequestVote") ||
+			(s == LEADER && task.RpcMethod == "Raft.RequestVote") {
 			Debug(dLog2, prefix+"拒绝发送任务，当前state=%d，任务rpc为：%s", rf.me, peerIndex, s, task.RpcMethod)
 			continue
 		}
@@ -96,7 +101,7 @@ func (rf *Raft) broadcastVote() bool {
 	localTerm := rf.term //因为可能在这个轮次中，返回term修改
 	var args *RequestVoteArgs
 	lastLog := rf.getLastLog()
-	lastLogIndex := len(rf.log) - 1
+	lastLogIndex := rf.IndexSmall2Big(len(rf.log) - 1)
 	args = &RequestVoteArgs{rf.term, rf.me, lastLogIndex, lastLog.Term}
 	Debug(dVote, "开始一轮选举 Term = %d req = %+v", rf.me, rf.term, *args)
 	for i := 0; i < rf.n; i++ {
@@ -175,9 +180,14 @@ func (rf *Raft) persist() {
 	e.Encode(rf.term)
 	e.Encode(rf.voteFor) //注意这两个是有顺序的，，毕竟是成为byte数组。。
 	e.Encode(rf.log)
+	e.Encode(rf.snapshot)
+	e.Encode(rf.snapshotIndex)
+	e.Encode(rf.snapshotMachineIndex)
+	e.Encode(rf.snapshotTerm)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-	Debug(dPersist, "保存持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	Debug(dPersist, "保存持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
+		"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readPersist(data []byte) {
@@ -189,36 +199,115 @@ func (rf *Raft) readPersist(data []byte) {
 	var term int
 	var voteFor int
 	var log []LogEntry
+	var si, st, mi int
+	var ss []byte
 	if d.Decode(&term) != nil ||
 		d.Decode(&voteFor) != nil ||
-		d.Decode(&log) != nil {
+		d.Decode(&log) != nil ||
+		d.Decode(&ss) != nil ||
+		d.Decode(&si) != nil ||
+		d.Decode(&mi) != nil ||
+		d.Decode(&st) != nil {
 		panic("decode err")
 	} else {
 		rf.term = term
 		rf.voteFor = voteFor
 		rf.log = log
+		rf.snapshot = ss
+		rf.snapshotIndex = si
+		rf.snapshotMachineIndex = mi
+		rf.snapshotTerm = st
 	}
-	Debug(dPersist, "读取持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	Debug(dPersist, "读取持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
+		rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 //
+
+//状态机用来询问raft是否可以安装快照,对应follower
+//状态机通过chan读取RPC传送过来的快照信息，并查询是否可以安装
+//raft在接收到快照之后，就会安装，即安装别人的快照，根据当前的commitIndex决定是否安装
+//对于状态机而言，除非这个比commitId大，否则没必要安装，不过对于raft而言，是肯定要截断的
+//状态机应该同步执行这个方法，保证先安装快照，在读取后面的commit数据
+//见 https://www.cnblogs.com/sun-lingyu/p/14591757.html
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	// Your code here (2D).
-
-	return true
+	Debug(dSnap, "CondInstallSnapshot请求 lastIncludedTerm=%d,lastIncludedIndex=%d", rf.me, lastIncludedTerm, lastIncludedIndex)
+	Debug(dSnap, "CondInstallSnapshot请求 当前log为 %+v", rf.me, rf.log)
+	//直接判断commitId即可
+	if rf.commitIndex >= rf.snapshotIndex {
+		Debug(dSnap, "CondInstallSnapshot请求 返回true,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
+		return false
+	} else {
+		Debug(dSnap, "CondInstallSnapshot请求 返回false,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
+		return true
+	}
 }
 
 // the service says it has created a snapshot that has
 // all info up to and including Index. this means the
 // service no longer needs the log through (and including)
 // that Index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
 
+//状态机通过这个方法告诉raft，它进行了状态快照
+//快照的byte由raft存储，状态机只负责创建
+//leader和follower都可以创建快照,这个index指的是快照对应的最后一个index
+//index从1开始
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	Debug(dSnap, "状态机提交快照请求 原始index=%d，log=%+v", rf.me, index, rf.log)
+	Debug(dSnap, "状态机当前快照信息：snapshotIndex=%d,snapshotTerm=%d,snapshotMachineIndex=%d", rf.me,
+		rf.snapshotIndex, rf.snapshotTerm, rf.snapshotMachineIndex)
+
+	//先找log index
+	smallIndex := rf.findSmallIndex(index)
+
+	if smallIndex == len(rf.log) {
+		Debug(dSnap, "index=%d 不存在，所以忽略,可能是太大或太小", rf.me, index)
+		return
+	}
+
+	bigIndex := rf.IndexSmall2Big(smallIndex)
+
+	Assert(bigIndex <= rf.commitIndex, "")
+
+	if bigIndex <= rf.snapshotIndex {
+		Debug(dSnap, "bigIndex=%d <= snapIndex=%d，所以忽略", rf.me, bigIndex, rf.snapshotIndex)
+		return
+	}
+
+	//更新和截断
+	rf.snapshot = snapshot
+	rf.snapshotIndex = bigIndex
+	rf.snapshotTerm = rf.log[smallIndex].Term
+	rf.snapshotMachineIndex = index
+
+	//截断日志
+	rf.TrimLog(smallIndex)
+
+	//持久化
+	rf.persist()
+	Debug(dSnap, "更新快照信息为snapshotIndex=%d，term=%d", rf.me, rf.snapshotIndex, rf.snapshotTerm)
+
+}
+
+//输入状态机的index，从1开始，找到smallIndex，如果没找到的话，
+//如果index太小了，小于所有的log就为-1，否则如果太大了，大于所有的log，就为-2
+func (rf *Raft) findSmallIndex(index int) int {
+	smallIndex := 0
+	for ; smallIndex < len(rf.log); smallIndex++ {
+		if rf.log[smallIndex].Index == index-1 {
+			break
+		}
+	}
+	return smallIndex
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
@@ -241,7 +330,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.persist()
 	rf.logAppendCondition.Broadcast()
-	thisIndex := len(rf.log) - 1
+	thisIndex := rf.IndexSmall2Big(len(rf.log) - 1)
 	localLastLog := rf.log[len(rf.log)-1] //因为可能并发修改
 
 	//开始广播
@@ -256,7 +345,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 					Debug(dCommit, "WARN:企图对S%d发送日志的时候，队列中还有别的内容等待发送len=%d", rf.me, i, len(rf.senderChannel[i]))
 				}
 
-				prev, prevIndex := rf.getLastLastLog()
+				prev, prevIndex := rf.getLastLastLog() //prevIndex是bigIndex
 				args := &AppendEntriesArgs{rf.term, []LogEntry{rf.getLastLog()}, prevIndex,
 					prev.Term, rf.commitIndex, rf.me}
 
@@ -292,12 +381,12 @@ func (rf *Raft) broadCastHeartBeat() {
 		if i != rf.me {
 			//Debug(dTrace, "对 S%d发送心跳", rf.me, i)
 
-			if len(rf.senderChannel[i]) == 0 && rf.matchIndex[i] == len(rf.log)-1 {
+			if len(rf.senderChannel[i]) == 0 && rf.IndexBig2Small(rf.matchIndex[i]) == len(rf.log)-1 {
 				args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
 				rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
 					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 			} else {
-				Debug(dLeader, " -> S%d 不发送心跳,此时队列长度为%d，matchIndex=%d，len of log=%d", rf.me,
+				Debug(dLeader, " -> S%d 不发送心跳,此时队列长度为%d，matchIndex=%d，len of log=%d(未修正)", rf.me,
 					i, len(rf.senderChannel[i]), rf.matchIndex[i], len(rf.log))
 			}
 		}
@@ -310,7 +399,7 @@ func (rf *Raft) initLeader() {
 	rf.leaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
-	SetArrayValue(rf.nextIndex, len(rf.log))
+	SetArrayValue(rf.nextIndex, rf.IndexSmall2Big(len(rf.log)))
 	SetArrayValue(rf.matchIndex, -1)
 
 	//todo 心跳检测等待结果，决定是否主动降级
@@ -448,18 +537,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//commit
 	rf.commitIndex = -1
-	rf.lastApplied = -1
 	rf.matchIndex = make([]int, rf.n) //初始化用于leader，或者follower自己的matchIndex
 	SetArrayValue(rf.matchIndex, -1)  //必备，因为持久化后重启的时候，需要是-1
+	rf.snapshotIndex = -1             //用于计算log的index
+	rf.snapshotTerm = -1
+	rf.snapshotMachineIndex = -1
 
 	//通信
 	rf.mu = NewReentrantLock()
 	rf.broadCastCondition = sync.NewCond(rf.mu)
-	rf.CommitIndexCondition = sync.NewCond(rf.mu)
 	rf.logAppendCondition = sync.NewCond(rf.mu)
 	rf.senderChannel = make([]chan *Task, rf.n)
+	rf.fuckerChan = make(chan *ApplyMsg, 1000)
 	rf.stateChanging = make(chan *ChangedState, ChannelSize)
-	rf.waitGroup = sync.WaitGroup{}
 	rf.rpcTimeout = RpcTimeout //Rpc timeout要短一些
 	rf.ResetTimer()
 
@@ -483,6 +573,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}
 
 	go rf.ticker()
+
+	go func() {
+		fc := rf.fuckerChan
+		ac := rf.applyCh
+		for i := range fc {
+			ac <- *i
+		}
+	}()
 
 	if EnableCheckThread {
 		go rf.check()

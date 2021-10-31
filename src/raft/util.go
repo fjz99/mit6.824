@@ -81,6 +81,26 @@ func (rf *Raft) ResetTimer() {
 	Debug(dTimer, "重置计时器", rf.me)
 }
 
+//获得log数组内的索引
+func (rf *Raft) IndexBig2Small(index int) int {
+	return index - rf.snapshotIndex - 1
+}
+
+//通过log数组内的索引获得具体的commitId这样的综合索引
+func (rf *Raft) IndexSmall2Big(index int) int {
+	return index + rf.snapshotIndex + 1
+}
+
+//根据snapshot的参数截断日志,节点重启后也必须截断！
+//todo 重启的时候，如果想恢复的话？？需要额外的信息
+func (rf *Raft) TrimLog(smallIndex int) {
+	//之前的都不要了，include边界
+	var temp []LogEntry
+	temp = Copy(temp, rf.log[smallIndex+1:])
+	rf.log = temp
+	Debug(dSnap, "日志被截断，smallIndex=%d，结果为%+v", rf.me, smallIndex, rf.log)
+}
+
 func GetNow() int64 {
 	return time.Now().UnixNano() / 1e6
 }
@@ -88,37 +108,51 @@ func GetNow() int64 {
 func (rf *Raft) getLastLog() LogEntry {
 	lens := len(rf.log)
 	if lens == 0 {
-		return LogEntry{Term: -1, Index: -1, Command: nil}
+		if rf.snapshotIndex != -1 {
+			return LogEntry{Term: rf.snapshotTerm, Index: rf.snapshotMachineIndex - 1, Command: nil}
+		} else {
+			return LogEntry{Term: -1, Index: -1, Command: nil}
+		}
 	} else {
 		return rf.log[lens-1]
 	}
 }
 
+//返回bigIndex
 func (rf *Raft) getLastLastLog() (LogEntry, int) {
 	lens := len(rf.log)
 	if lens <= 1 {
-		return LogEntry{Term: -1, Index: -1, Command: nil}, -1
+		if rf.snapshotIndex != -1 {
+			return LogEntry{Term: rf.snapshotTerm, Index: rf.snapshotMachineIndex - 1, Command: nil}, rf.snapshotIndex
+		} else {
+			return LogEntry{Term: -1, Index: -1, Command: nil}, -1
+		}
 	} else {
-		return rf.log[lens-2], lens - 2
+		return rf.log[lens-2], rf.IndexSmall2Big(lens - 2)
 	}
 }
 
 //获得某个索引位置的上一个log，位置必须是有效的
-func (rf *Raft) getLastLogOf(index int) LogEntry {
-	Assert(index >= 0 && index < len(rf.log), "")
-	if index == 0 {
-		return LogEntry{Term: -1, Index: -1, Command: nil}
+func (rf *Raft) getLastLogOf(smallIndex int) LogEntry {
+	Assert(smallIndex >= 0 && smallIndex < len(rf.log), "smallIndex")
+	if smallIndex == 0 {
+		if rf.snapshotIndex != -1 {
+			return LogEntry{Term: rf.snapshotTerm, Index: rf.snapshotMachineIndex - 1, Command: nil}
+		} else {
+			return LogEntry{Term: -1, Index: -1, Command: nil}
+		}
 	} else {
-		return rf.log[index-1]
+		return rf.log[smallIndex-1]
 	}
 }
 
 //index的作用就是打日志。。
+//这里不能持有锁！thisEntry复制了一份，所以，没事
 func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
 	//nil代表是空entry
 	if thisEntry.Command != nil {
 		Debug(dCommit, "发送测试数据 command=%+v，内部index=%d 修正index=%d", rf.me, thisEntry.Command, index, thisEntry.Index+1)
-		rf.applyCh <- ApplyMsg{CommandValid: true, Command: thisEntry.Command, CommandIndex: thisEntry.Index + 1} //index从一开始，所以返回+1
+		rf.fuckerChan <- &ApplyMsg{CommandValid: true, Command: thisEntry.Command, CommandIndex: thisEntry.Index + 1} //index从一开始，所以返回+1
 	} else {
 		Debug(dCommit, "因为cmd=nil不发送测试数据", rf.me)
 	}
@@ -130,8 +164,14 @@ func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
 		myMatchIndex, rf.commitIndex, LeaderCommit)
 	c := Min(LeaderCommit, myMatchIndex) //follower就不用唤醒cond了
 	//注意空entry就不用apply了。。
+	//注意，在有了快照的时候，如果直接安装快照的话，就无法发送log entry了
 	for i := rf.commitIndex + 1; i <= c; i++ {
-		rf.ApplyMsg2B(&rf.log[i], i)
+		if rf.IndexBig2Small(i) >= 0 {
+			localLog := rf.log[rf.IndexBig2Small(i)]
+			rf.ApplyMsg2B(&localLog, i) //这里不能持有锁！会死锁
+		} else {
+			Debug(dTrace, "无法发送测试数据，因为比快照早，具体i=%d，snapIndex=%d", i, rf.snapshotIndex)
+		}
 	}
 
 	//Assert(c >= rf.commitIndex, "") //leader的commitId可能比我（follower）小！，见figure8，和bugfix9
@@ -184,27 +224,32 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 
 //找超过半数的，办法很简单，直接排序，然后取前半数个,找到最大值，一起更新
 //注意判断term！
+//fixme
 func (rf *Raft) LeaderUpdateCommitIndex() {
 	temp := make([]int, len(rf.nextIndex))
 	copy(temp, rf.matchIndex)
-	temp[rf.me] = len(rf.log) - 1
+	temp[rf.me] = rf.IndexSmall2Big(len(rf.log) - 1)
 	//逆序排序
 	sort.Sort(sort.Reverse(sort.IntSlice(temp))) //.......
 	Debug(dCommit, "LeaderUpdateCommitIndex matchIndex逆序排序的结果为 %+v ", rf.me, temp)
-	maxIndex := temp[rf.n/2]
+	maxIndex := rf.IndexBig2Small(temp[rf.n/2])
 	Debug(dCommit, "LeaderUpdateCommitIndex 选择的过半最小matchIndex=%d", rf.me, maxIndex)
-	if maxIndex > rf.commitIndex {
+	if maxIndex > rf.IndexBig2Small(rf.commitIndex) {
 		//过半了,检查当前index的任期
 		if rf.log[maxIndex].Term == rf.term {
 
 			//用于测试
 			//很坑。。因为可能有fig.8的情况，主节点的commitId不一定是满的！,所以主节点更新commitId的时候，需要多次给chan发送数据！
-			for i := rf.commitIndex + 1; i <= maxIndex; i++ {
-				rf.ApplyMsg2B(&rf.log[i], i)
+			for i := rf.IndexBig2Small(rf.commitIndex + 1); i <= maxIndex; i++ { //fixme bug
+				if i >= 0 {
+					localLog := rf.log[i]
+					rf.ApplyMsg2B(&localLog, i)
+				} else {
+					Debug(dTrace, "无法发送测试数据，因为比快照早，具体i=%d，snapIndex=%d", i, rf.snapshotIndex)
+				}
 			}
 
-			rf.commitIndex = maxIndex
-			rf.CommitIndexCondition.Broadcast()
+			rf.commitIndex = rf.IndexSmall2Big(maxIndex)
 			Debug(dCommit, "commitId 修改为 %d，此时matchIndex=%+v,广播这个消息", rf.me, rf.commitIndex, rf.matchIndex)
 		} else {
 			Debug(dCommit, "最大的过半matchIndex为%d，但是term为%d，而leader term为%d，所以放弃更新commitId",
@@ -215,8 +260,9 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 
 //生成新任务
 func (rf *Raft) generateNewTask(peerIndex int, clearChannel bool) *Task {
-	nextIndex := rf.nextIndex[peerIndex]
-	Assert(nextIndex <= len(rf.log), "")
+	nextIndex := rf.IndexBig2Small(rf.nextIndex[peerIndex])
+	Assert(nextIndex <= len(rf.log),
+		fmt.Sprintf("nextIndex=%d,rf.log=%+v,snap=%d,next origin=%d", nextIndex, rf.log, rf.snapshotIndex, rf.nextIndex[peerIndex]))
 	if rf.state != LEADER {
 		return nil
 	}
@@ -225,6 +271,15 @@ func (rf *Raft) generateNewTask(peerIndex int, clearChannel bool) *Task {
 		Debug(dTrace, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
 		//todo 如果没有任务生成的话，就等待在cond上，即只需要leader启动一次nil，后面都不需要给chan添加任务了
 		return nil
+	}
+
+	if rf.nextIndex[peerIndex] <= rf.snapshotIndex {
+		Debug(dCommit, "日志log=%+v不足了(snapshotIndex=%d,nextIndex=%d)！选择发送快照！", rf.me, rf.log,
+			rf.snapshotIndex, rf.nextIndex[peerIndex])
+		args := &InstallSnapshotArgs{rf.term, rf.me, rf.snapshot, true, 0,
+			rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm}
+		return &Task{snapshotRpcFailureCallback, snapshotRpcSuccessCallback,
+			args, &InstallSnapshotReply{}, "Raft.InstallSnapshot"}
 	}
 
 	lastLog := rf.getLastLogOf(nextIndex)
@@ -236,13 +291,13 @@ func (rf *Raft) generateNewTask(peerIndex int, clearChannel bool) *Task {
 	} else {
 		arr = Copy(arr, rf.log[nextIndex:])
 	}
-	args = &AppendEntriesArgs{rf.term, arr, nextIndex - 1, //因为nextIndex从0开始，所以可以保证-1
+	args = &AppendEntriesArgs{rf.term, arr, rf.IndexSmall2Big(nextIndex - 1), //因为nextIndex从0开始，所以可以保证-1
 		lastLog.Term, rf.commitIndex, rf.me}
 	Assert(len(arr) > 0, "")
 
-	if clearChannel {
-		rf.cleanupSenderChannelFor(peerIndex)
-	}
+	//if clearChannel {
+	//	rf.cleanupSenderChannelFor(peerIndex)
+	//}
 
 	//rf.senderChannel[peerIndex] <- &Task{appendEntriesRpcFailureCallback, appendEntriesRpcSuccessCallback,
 	//	args, &AppendEntriesReply{}, "Raft.AppendEntries"}
@@ -258,6 +313,7 @@ func (rf *Raft) backward(peerIndex int, reply *AppendEntriesReply) {
 	//Assert(rf.nextIndex[peerIndex] > rf.matchIndex[peerIndex], "")
 
 	//查找是否存在
+	// fixme 是否需要考虑到snapshot?
 	ci := 0
 	for ; ci < len(rf.log); ci++ {
 		if rf.log[ci].Term == reply.ConflictTerm {
@@ -269,62 +325,21 @@ func (rf *Raft) backward(peerIndex int, reply *AppendEntriesReply) {
 		Debug(dCommit, "没有找到follower的ConflictTerm=%d,所以设置nextIndex=ConflictIndex=%d",
 			rf.me, reply.ConflictTerm, reply.ConflictIndex)
 	} else {
-		//找最后一个位置
+		//找最后一个位置的下个位置
 		for ; ci < len(rf.log) && rf.log[ci].Term == reply.Term; ci++ {
 
 		}
-		rf.nextIndex[peerIndex] = ci
+		rf.nextIndex[peerIndex] = rf.IndexSmall2Big(ci)
 		Debug(dCommit, "找到了follower的ConflictTerm=%d,所以设置nextIndex=这个term的下一个term的第一个index=%d",
-			rf.me, reply.ConflictTerm, ci)
+			rf.me, reply.ConflictTerm, rf.nextIndex[peerIndex])
 	}
 	//不过这种情况似乎不会发生。。
+	//fixme ?
 	if rf.nextIndex[peerIndex] <= rf.matchIndex[peerIndex] {
 		Debug(dCommit, "WARN：回退nextIndex %d 的时候，竟然小于等于MatchIndex %d 了！修正为macthIndex+1!",
 			rf.me, rf.nextIndex[peerIndex], rf.matchIndex[peerIndex])
 		rf.nextIndex[peerIndex] = rf.matchIndex[peerIndex] + 1
 	}
-}
-
-//判断task是否有意义
-func (rf *Raft) TaskImportance(peerIndex int, a *Task) bool {
-	if a.RpcMethod != "Raft.AppendEntries" {
-		return false
-	}
-	args := a.Args.(*AppendEntriesArgs)
-	//是心跳
-	if args.Log == nil {
-		return false
-	}
-	//无意义的任务,都做完了
-	if args.PrevLogIndex+len(args.Log) <= rf.matchIndex[peerIndex] {
-		return false
-	} else {
-		return true
-	}
-}
-
-//checkTask,检查目前这个队列中的任务，只保留最小prevIndex的，去除心跳，因为有新任务来了
-func (rf *Raft) checkSenderChannelTask(peerIndex int, newTask *Task) {
-	var oldTask, minTask *Task
-	minTask = newTask
-	channel := rf.senderChannel[peerIndex]
-	//加锁，保证不race
-	for i := 0; i < len(channel)-1; i++ {
-		oldTask = <-channel
-		//忽略投票请求
-		if oldTask.RpcMethod == "Raft.AppendEntries" {
-			args := oldTask.Args.(*AppendEntriesArgs)
-			//不是心跳
-			if args.Log != nil {
-				if args.PrevLogIndex < minTask.Args.(*AppendEntriesArgs).PrevLogIndex {
-					minTask = oldTask
-					Assert(args.PrevLogTerm == minTask.Args.(*AppendEntriesArgs).PrevLogTerm, "")
-				}
-			}
-		}
-	}
-	channel <- minTask
-	Debug(dCommit, "清除发送队列%d完成，保留最小的任务 %+v", rf.me, peerIndex, *minTask.Args.(*AppendEntriesArgs))
 }
 
 func (rf *Raft) cleanupSenderChannelFor(peerIndex int) {

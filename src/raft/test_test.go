@@ -239,17 +239,16 @@ func TestFailAgree2B(t *testing.T) {
 	time.Sleep(RaftElectionTimeout)
 	cfg.one(104, servers-1, false)
 	cfg.one(105, servers-1, false)
-
 	// re-connect
 	cfg.connect((leader + 1) % servers)
 
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
-	//fmt.Println("fuck! test ", 106)
+	fmt.Println("fuck! test ", 106)
 	cfg.one(106, servers, true)
 	time.Sleep(RaftElectionTimeout)
-	//fmt.Println("fuck! test ", 107)
+	fmt.Println("fuck! test ", 107)
 	cfg.one(107, servers, true)
 
 	cfg.end()
@@ -1085,6 +1084,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
+		fmt.Println("iter= ", i)
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
@@ -1100,6 +1100,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+
 		// send enough to get a snapshot
 		for i := 0; i < SnapShotInterval+1; i++ {
 			cfg.rafts[sender].Start(rand.Int())
@@ -1110,6 +1111,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
 		}
+
 		if disconnect {
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.

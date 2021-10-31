@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #cd ../src/raft
-a=$(VERBOSE=1 go test -race -run FailAgree2B > e.log && tail -n 1 e.log | grep -o ok)
+a=$(VERBOSE=1 go test -race -run TestSnapshotBasic2D > e.log && tail -n 1 e.log | grep -o ok)
 #a=$(VERBOSE=1 go test -race -run 2A > e.log && tail -n 1 e.log | grep -o ok)
 #VERBOSE=0 go test -race -run 2A | tee e.log
 #a=$(tail -n 1 e.log | grep -o ok) #输出到命令行

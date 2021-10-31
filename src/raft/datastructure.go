@@ -69,20 +69,19 @@ type Task struct {
 }
 
 type Raft struct {
-	mu                   sync.Locker // Lock to protect shared access to this peer's state
-	broadCastCondition   *sync.Cond
-	CommitIndexCondition *sync.Cond //监听commitId的变化
-	logAppendCondition   *sync.Cond //监听日志的添加操作
-	agreeCounter         int        //用于统计过半机制
-	doneRPCs             int        //统计完成了多少rpc
-	waitGroup            sync.WaitGroup
+	mu                 sync.Locker // Lock to protect shared access to this peer's state
+	broadCastCondition *sync.Cond
+	logAppendCondition *sync.Cond //监听日志的添加操作
+	agreeCounter       int        //用于统计过半机制
+	doneRPCs           int        //统计完成了多少rpc
 
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's Index into peers[]
-	dead      int32               // set by Kill()
-	applyCh   chan ApplyMsg       //用于把commit的日志输出，从而实现测试。。
-	n         int                 //总共几个节点
+	peers      []*labrpc.ClientEnd // RPC end points of all peers
+	persister  *Persister          // Object to hold this peer's persisted state
+	me         int                 // this peer's Index into peers[]
+	dead       int32               // set by Kill()
+	applyCh    chan ApplyMsg       //用于把commit的日志输出，从而实现测试。。
+	n          int                 //总共几个节点
+	fuckerChan chan *ApplyMsg      //测试用例里的appchan是同步队列，在2D中很容易阻塞，所以加一个缓冲区。。
 
 	state         State
 	stateChanging chan *ChangedState
@@ -96,6 +95,11 @@ type Raft struct {
 	nextIndex     []int        //leader使用初始化为 最大日志index的下一个id，用于回溯
 	matchIndex    []int        //leader使用初始化为 -1
 	senderChannel []chan *Task //为了并行发送心跳和日志提交，一个一个提交的话，是串行，非常慢，还存在超时重试的问题！在
+
+	snapshot             []byte //快照
+	snapshotTerm         int
+	snapshotIndex        int
+	snapshotMachineIndex int //给状态机的index
 
 	lastAccessTime   int64 //用于心跳检测
 	electionInterval time.Duration
@@ -129,4 +133,19 @@ type ApplyMsg struct {
 type ChangedState struct {
 	from State
 	to   State
+}
+
+type InstallSnapshotArgs struct {
+	Term                     int
+	LeaderId                 int
+	Snapshot                 []byte
+	Done                     bool
+	Offset                   int
+	LastIncludedIndex        int //log 数组index，从0开始
+	LastIncludedMachineIndex int //即状态机index，从1开始
+	LastIncludedTerm         int
+}
+
+type InstallSnapshotReply struct {
+	Term int
 }
