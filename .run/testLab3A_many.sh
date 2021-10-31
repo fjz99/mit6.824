@@ -6,7 +6,7 @@ if [ $# -ne 1 ]; then
 fi
 
 trap 'kill -INT -$pid; exit 1' INT
-cd ../src/raft
+cd ../src/kvraft
 # Note: because the socketID is based on the current userID,
 # ./test-mr.sh cannot be run in parallel
 runs=$1

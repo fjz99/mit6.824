@@ -4,62 +4,126 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"log"
 	"sync"
 	"sync/atomic"
 )
 
-const Debug = false
+//todo 暂时先不用队列，直接使用lcoalIndex
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
+//执行命令，维护状态机
+//todo 暂时不考虑快照
+//检查leader都在rpc中，状态机只负责维护状态
+func (kv *KVServer) applier() {
+	Debug(dServer, "S%d applier线程启动成功", kv.me)
+	for op := range kv.applyCh {
+		if op.SnapshotValid {
+			Assert(!op.CommandValid, "")
+		} else {
+			cmd := op.Command.(Command)
+			Assert(op.CommandValid, "")
+			Assert(op.CommandIndex == kv.lastApplied+1, "") //保证线性一致性
+			Debug(dMachine, "S%d 状态机开始执行命令%+v", kv.me, cmd)
+
+			switch cmd.Op.Type {
+			case PutType:
+				{
+					kv.put(op.CommandIndex, cmd)
+					break
+				}
+			case AppendType:
+				{
+					kv.append(op.CommandIndex, cmd)
+					break
+				}
+			case GetType:
+				{
+					kv.get(op.CommandIndex, cmd)
+					break
+				}
+			case RegisterType:
+				{
+					kv.register(op.CommandIndex, cmd)
+					break
+				}
+			default:
+				panic(1)
+			}
+			kv.lastApplied++
+			Debug(dMachine, "S%d 状态机开始执行命令%+v结束，结果为%+v", kv.me, cmd, kv.output[op.CommandIndex])
+		}
 	}
-	return
 }
 
+//todo
+//todo 重复验证+保存最近的op
+func (kv *KVServer) put(CommandIndex int, command Command) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Debug(dMachine, "S%d 执行put命令,index=%d,cmd=%d", kv.me, CommandIndex, command)
+
+	if !kv.checkDuplicate(CommandIndex, command) {
+		kv.stateMachine[command.Op.Key] = command.Op.Value
+		kv.output[CommandIndex] = &StateMachineOutput{OK, command.Op.Value}
+	}
+
+	kv.commitIndexCond.Broadcast()
 }
 
-type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+func (kv *KVServer) get(CommandIndex int, command Command) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
-	maxraftstate int // snapshot if log grows this big
+	Debug(dMachine, "S%d 执行get命令,index=%d,cmd=%d", kv.me, CommandIndex, command)
 
-	// Your definitions here.
+	if v, ok := kv.stateMachine[command.Op.Key]; ok {
+		Debug(dMachine, "S%d 执行get命令,value=%s", kv.me, CommandIndex, v)
+		kv.output[CommandIndex] = &StateMachineOutput{OK, v}
+	} else {
+		Debug(dMachine, "S%d 执行get命令,key不存在", kv.me, CommandIndex)
+		kv.output[CommandIndex] = &StateMachineOutput{ErrNoKey, ""}
+	}
+	kv.commitIndexCond.Broadcast()
 }
 
+func (kv *KVServer) append(CommandIndex int, command Command) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	Debug(dMachine, "S%d 执行append命令,index=%d,cmd=%d", kv.me, CommandIndex, command)
+
+	if !kv.checkDuplicate(CommandIndex, command) {
+		if v, ok := kv.stateMachine[command.Op.Key]; ok {
+			Debug(dMachine, "S%d 执行append命令,value=%s", kv.me, CommandIndex, v)
+			kv.stateMachine[command.Op.Key] = v + command.Op.Value
+			kv.output[CommandIndex] = &StateMachineOutput{OK, kv.stateMachine[command.Op.Key]}
+		} else {
+			Debug(dMachine, "S%d 执行append命令,key不存在", kv.me, CommandIndex)
+			kv.output[CommandIndex] = &StateMachineOutput{ErrNoKey, ""}
+		}
+	}
+
+	kv.commitIndexCond.Broadcast()
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+func (kv *KVServer) register(CommandIndex int, command Command) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	Debug(dMachine, "S%d 执行register命令,index=%d,cmd=%d", kv.me, CommandIndex, command)
+	session := &Session{kv.sessionId, -1, Op{Type: RegisterType}}
+	kv.session[session.clientId] = session
+	kv.output[CommandIndex] = &StateMachineOutput{OK, session.clientId}
+	Debug(dMachine, "S%d 执行register命令,分配sessionId=%d", kv.me, session.clientId)
+	kv.commitIndexCond.Broadcast()
+	kv.sessionId++
 }
 
-//
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
-// long-running loops. you can also add your own
-// code to Kill(). you're not required to do anything
-// about this, but it may be convenient (for example)
-// to suppress debug output from a Kill()ed instance.
-//
 func (kv *KVServer) Kill() {
+	Debug(dServer, "被kill", kv.me)
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
+	close(kv.applyCh) //否则applier线程无法停止。。
 }
 
 func (kv *KVServer) killed() bool {
@@ -84,18 +148,27 @@ func (kv *KVServer) killed() bool {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
+	InitLog()
+
 	labgob.Register(Op{})
+	labgob.Register(Command{}) //todo ??
 
 	kv := new(KVServer)
 	kv.me = me
+	kv.n = len(servers)
 	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
+	kv.mu = raft.NewReentrantLock()
+	kv.commitIndexCond = sync.NewCond(kv.mu)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	// You may need initialization code here.
+	kv.lastApplied = 0
+	kv.output = make(map[int]*StateMachineOutput)
+	kv.sessionId = 0
+	kv.session = map[int]*Session{}
+
+	go kv.applier() //主线程
 
 	return kv
 }

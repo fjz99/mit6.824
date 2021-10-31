@@ -136,7 +136,7 @@ func snapshotRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply
 	req := args.(*InstallSnapshotArgs)
 
 	//注意使用最新的快照，而不要直接复制一份
-	thisArgs := &InstallSnapshotArgs{rf.term, rf.leaderId, rf.snapshot, req.Done,
+	thisArgs := &InstallSnapshotArgs{rf.term, rf.LeaderId, rf.snapshot, req.Done,
 		req.Offset, rf.snapshotIndex, rf.snapshotMachineIndex,
 		rf.snapshotTerm}
 

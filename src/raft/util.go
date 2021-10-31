@@ -184,7 +184,7 @@ func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
 func (rf *Raft) ChangeState(to State) {
 	if from := rf.state; from != to {
 		if to == LEADER {
-			rf.leaderId = rf.me
+			rf.LeaderId = rf.me
 		}
 		if to == FOLLOWER {
 			rf.matchIndex[rf.me] = rf.commitIndex
@@ -217,7 +217,7 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	rf.voteFor = -1 //重置
 	rf.term = newTerm
 	rf.persist()
-	rf.leaderId = leaderId
+	rf.LeaderId = leaderId
 	rf.ChangeState(FOLLOWER)
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
@@ -425,4 +425,11 @@ func (rf *Raft) findSmallIndex(index int) int {
 		}
 	}
 	return smallIndex
+}
+
+//下面是给kv使用的
+func (rf *Raft) GetLeaderId() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.LeaderId
 }

@@ -91,7 +91,7 @@ func (rf *Raft) broadcastVote() {
 	rf.persist() //此方法内部没有lock
 	rf.doneRPCs = 0
 	rf.agreeCounter = 1
-	rf.leaderId = -1
+	rf.LeaderId = -1
 	localTerm := rf.term //因为可能在这个轮次中，返回term修改
 	var args *RequestVoteArgs
 	lastLog := rf.getLastLog()
@@ -114,9 +114,9 @@ func (rf *Raft) broadcastVote() {
 	}
 
 	//其他人变成leader
-	if rf.leaderId != -1 {
+	if rf.LeaderId != -1 {
 		//心跳handler中处理了
-		Debug(dVote, "%d 轮次选举完成，已发现新的leader S%d", rf.me, rf.term, rf.leaderId)
+		Debug(dVote, "%d 轮次选举完成，已发现新的leader S%d", rf.me, rf.term, rf.LeaderId)
 		return
 	}
 	if localTerm != rf.term {
@@ -128,7 +128,7 @@ func (rf *Raft) broadcastVote() {
 		Debug(dInfo, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
 
 		rf.ChangeState(LEADER)
-		rf.leaderId = rf.me
+		rf.LeaderId = rf.me
 
 		//同步执行init，保证一定可以初始化matchIndex等数组
 		//start第一个条日志的时候，也依赖于LEADER状态
@@ -144,7 +144,7 @@ func (rf *Raft) broadcastVote() {
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	Debug(dTest, "GetState 被调用！ leader = %d, state = %d", rf.me, rf.leaderId, rf.state)
+	Debug(dTest, "GetState 被调用！ leader = %d, state = %d", rf.me, rf.LeaderId, rf.state)
 	return rf.term, rf.state == LEADER
 }
 
@@ -327,7 +327,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) Kill() {
-	Debug(dPersist, "服务器下线，被kill了", rf.me)
+	Debug(dInfo, "服务器下线，被kill了", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
 }
 
@@ -359,7 +359,7 @@ func (rf *Raft) broadCastHeartBeat() {
 func (rf *Raft) initLeader() {
 	Debug(dLeader, "开始leader初始化!", rf.me)
 
-	rf.leaderId = rf.me
+	rf.LeaderId = rf.me
 	rf.nextIndex = make([]int, rf.n)
 	rf.matchIndex = make([]int, rf.n)
 	SetArrayValue(rf.nextIndex, rf.IndexSmall2Big(len(rf.log)))
@@ -388,7 +388,7 @@ func (rf *Raft) processLeader() {
 			} else {
 				//变成follower了,清空发送队列
 				rf.cleanupSenderChannel()
-				Debug(dLeader, "leader 被 S%d term=%d 降级了为follower！，清空发送队列", rf.me, rf.leaderId, rf.term)
+				Debug(dLeader, "leader 被 S%d term=%d 降级了为follower！，清空发送队列", rf.me, rf.LeaderId, rf.term)
 			}
 			rf.mu.Unlock()
 			break
@@ -494,7 +494,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	//选举相关
 	rf.state = FOLLOWER
-	rf.leaderId = -1
+	rf.LeaderId = -1
 	rf.voteFor = -1
 	rf.term = 0
 

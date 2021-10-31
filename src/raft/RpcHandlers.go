@@ -64,7 +64,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//处理leader的改动
 	Assert(rf.state != LEADER, "发生脑裂") //如果term小，则丢弃；如果term大则降级为follower；如果term相同，还为leader，那就脑裂了
-	rf.leaderId = args.LeaderId
+	rf.LeaderId = args.LeaderId
 	if rf.state == CANDIDATE {
 		rf.ChangeState(FOLLOWER)
 	}
@@ -163,7 +163,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			//匹配不到，查看是到达哪个边界了
 			if followerLogIndex == len(followerLog) {
-				Debug(dCommit, "这次日志复制中,follower日志中没有不匹配的位置，选择将leader S%d 的日志追加到后面！", rf.me, rf.leaderId)
+				Debug(dCommit, "这次日志复制中,follower日志中没有不匹配的位置，选择将leader S%d 的日志追加到后面！", rf.me, rf.LeaderId)
 				//2.复制日志
 				for i := leaderLogIndex; i < len(leaderLog); i++ {
 					rf.log = append(rf.log, leaderLog[i])
@@ -173,7 +173,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], rf.IndexSmall2Big(len(rf.log)-1))
 				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			} else {
-				Debug(dCommit, "WARN:这次日志复制中，leader S%d 发送的日志是follower日志的子集！", rf.me, rf.leaderId)
+				Debug(dCommit, "WARN:这次日志复制中，leader S%d 发送的日志是follower日志的子集！", rf.me, rf.LeaderId)
 
 				//子集的情况下，子集的结尾才是新的matchIndex！！！
 				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], args.PrevLogIndex+len(args.Log))
