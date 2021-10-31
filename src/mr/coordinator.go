@@ -262,7 +262,7 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-//
+// Done
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 //
@@ -276,7 +276,7 @@ func (c *Coordinator) Done() bool {
 	return false
 }
 
-//
+// MakeCoordinator
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // NReduce is the number of reduce tasks to use.

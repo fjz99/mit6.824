@@ -13,16 +13,10 @@ import (
 	"6.824/labrpc"
 )
 
-//todo batchsize选择
-//todo 注意由此带来的index的改动
 //todo 不用clearChannel了，选举为leader之后clear一下就行了；心跳还是一样，有内容就不发送
-//todo 日志复制的时候，选择发送快照，然后再复制
-//todo 当创建了快照之后，leader要发送给所有的follower，使其裁剪log
-// toto 技巧把东西化为small的临时变量，最后再变回去!go
 
 const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
-const EnableCheckThread = false                          //启动周期检查,todo 测试时别忘了关闭。。
 const RpcTimeout = time.Duration(100) * time.Millisecond //事实上可以不自己设置超时时间也能通过
 const MinElectionTimeoutInterval = 250
 const BatchSize = 50 //20个log一个batch
@@ -75,7 +69,7 @@ func (rf *Raft) messageSender(peerIndex int) {
 					task.RpcErrorCallback(peerIndex, rf, task.Args, task.Reply)
 				} else {
 					Debug(dLog2, prefix+"返回结果 %+v", rf.me, peerIndex, task.Reply)
-					go task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply, task) //这里因为要wait所以。。
+					go task.RpcSuccessCallback(peerIndex, rf, task.Args, task.Reply) //这里因为要wait所以。。
 				}
 			})
 		Debug(dLog2, prefix+"对 S%d 发送请求结束 %+v", rf.me, peerIndex, peerIndex, task.Args)
@@ -83,14 +77,14 @@ func (rf *Raft) messageSender(peerIndex int) {
 }
 
 //Candidate
-func (rf *Raft) broadcastVote() bool {
+func (rf *Raft) broadcastVote() {
 	//Debug(dVote, "调用 broadcastVote", rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//logA-1.log 校验状态
 	if rf.state != CANDIDATE {
 		Debug(dVote, "进入broadcastVote临界区后，发现状态发生改变为 %d ，所以终止选举", rf.me, rf.state)
-		return true
+		return
 	}
 	rf.term++
 	rf.voteFor = rf.me
@@ -123,12 +117,12 @@ func (rf *Raft) broadcastVote() bool {
 	if rf.leaderId != -1 {
 		//心跳handler中处理了
 		Debug(dVote, "%d 轮次选举完成，已发现新的leader S%d", rf.me, rf.term, rf.leaderId)
-		return true
+		return
 	}
 	if localTerm != rf.term {
 		//callback中修改了
 		Debug(dVote, "%d轮次选举完成，term修改为 %d,状态变为follower", rf.me, localTerm, rf.term)
-		return true
+		return
 	}
 	if rf.agreeCounter >= rf.n/2+1 {
 		Debug(dInfo, "%d轮次选举完成，票数为 %d,我 S%d 成为了leader！", rf.me, localTerm, rf.agreeCounter, rf.me)
@@ -140,10 +134,10 @@ func (rf *Raft) broadcastVote() bool {
 		//start第一个条日志的时候，也依赖于LEADER状态
 		rf.initLeader()
 
-		return true
+		return
 	} else {
 		Debug(dVote, "%d轮次选举完成，票数为 %d,没有过半", rf.me, localTerm, rf.agreeCounter)
-		return false
+		return
 	}
 }
 
@@ -152,25 +146,6 @@ func (rf *Raft) GetState() (int, bool) {
 	defer rf.mu.Unlock()
 	Debug(dTest, "GetState 被调用！ leader = %d, state = %d", rf.me, rf.leaderId, rf.state)
 	return rf.term, rf.state == LEADER
-}
-
-func (rf *Raft) check() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	switch rf.state {
-	case LEADER:
-		Assert(rf.leaderId == rf.me, "")
-		Assert(rf.voteFor == rf.me, "")
-		break
-	case FOLLOWER:
-		Assert(rf.leaderId != rf.me, "")
-		break
-	case CANDIDATE:
-		Assert(rf.voteFor == rf.me, "")
-		Assert(rf.leaderId == -1, "")
-		break
-	}
-	time.Sleep(time.Duration(2) * time.Second)
 }
 
 //即使是log数组，也可以恢复，只要过半崩溃
@@ -224,10 +199,10 @@ func (rf *Raft) readPersist(data []byte) {
 
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
+// had more recent info since it communicate the snapshot on applyCh.
 //
 
-//状态机用来询问raft是否可以安装快照,对应follower
+// CondInstallSnapshot 状态机用来询问raft是否可以安装快照,对应follower
 //状态机通过chan读取RPC传送过来的快照信息，并查询是否可以安装
 //raft在接收到快照之后，就会安装，即安装别人的快照，根据当前的commitIndex决定是否安装
 //对于状态机而言，除非这个比commitId大，否则没必要安装，不过对于raft而言，是肯定要截断的
@@ -254,7 +229,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // service no longer needs the log through (and including)
 // that Index. Raft should now trim its log as much as possible.
 
-//状态机通过这个方法告诉raft，它进行了状态快照
+// Snapshot 状态机通过这个方法告诉raft，它进行了状态快照
 //快照的byte由raft存储，状态机只负责创建
 //leader和follower都可以创建快照,这个index指的是快照对应的最后一个index
 //index从1开始
@@ -296,18 +271,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.persist()
 	Debug(dSnap, "更新快照信息为snapshotIndex=%d，term=%d", rf.me, rf.snapshotIndex, rf.snapshotTerm)
 
-}
-
-//输入状态机的index，从1开始，找到smallIndex，如果没找到的话，
-//如果index太小了，小于所有的log就为-1，否则如果太大了，大于所有的log，就为-2
-func (rf *Raft) findSmallIndex(index int) int {
-	smallIndex := 0
-	for ; smallIndex < len(rf.log); smallIndex++ {
-		if rf.log[smallIndex].Index == index-1 {
-			break
-		}
-	}
-	return smallIndex
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
@@ -565,7 +528,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.electionInterval = time.Duration(r.Int31n(151)+MinElectionTimeoutInterval) * time.Millisecond
 	Debug(dInfo, "选举超时时间为 %s", rf.me, rf.electionInterval.String())
 
-	// initialize from state persisted before a crash
 	//放在这里也行，毕竟是同步执行的，而且此时ticker线程还没启动，不用加锁
 	rf.readPersist(persister.ReadRaftState())
 	if rf.voteFor == rf.me {
@@ -581,10 +543,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			ac <- *i
 		}
 	}()
-
-	if EnableCheckThread {
-		go rf.check()
-	}
 
 	return rf
 }

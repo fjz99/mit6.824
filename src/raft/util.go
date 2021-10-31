@@ -38,7 +38,7 @@ var debugStart time.Time
 var debugVerbosity int
 var logInitLock = sync.Mutex{}
 
-//提前手动调用
+// InitLog 提前手动调用
 func InitLog() {
 	logInitLock.Lock()
 	defer logInitLock.Unlock()
@@ -75,23 +75,23 @@ func getVerbosity() int {
 	return level
 }
 
-//caller heartbeat; appendEntry; election timeout;vote others
+// ResetTimer caller heartbeat; appendEntry; election timeout;vote others
 func (rf *Raft) ResetTimer() {
 	rf.lastAccessTime = GetNow()
 	Debug(dTimer, "重置计时器", rf.me)
 }
 
-//获得log数组内的索引
+// IndexBig2Small 获得log数组内的索引
 func (rf *Raft) IndexBig2Small(index int) int {
 	return index - rf.snapshotIndex - 1
 }
 
-//通过log数组内的索引获得具体的commitId这样的综合索引
+// IndexSmall2Big 通过log数组内的索引获得具体的commitId这样的综合索引
 func (rf *Raft) IndexSmall2Big(index int) int {
 	return index + rf.snapshotIndex + 1
 }
 
-//根据snapshot的参数截断日志,节点重启后也必须截断！
+// TrimLog 根据snapshot的参数截断日志,节点重启后也必须截断！
 //todo 重启的时候，如果想恢复的话？？需要额外的信息
 func (rf *Raft) TrimLog(smallIndex int) {
 	//之前的都不要了，include边界
@@ -146,7 +146,7 @@ func (rf *Raft) getLastLogOf(smallIndex int) LogEntry {
 	}
 }
 
-//index的作用就是打日志。。
+// ApplyMsg2B index的作用就是打日志。。
 //这里不能持有锁！thisEntry复制了一份，所以，没事
 func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
 	//nil代表是空entry
@@ -222,7 +222,7 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
 }
 
-//找超过半数的，办法很简单，直接排序，然后取前半数个,找到最大值，一起更新
+// LeaderUpdateCommitIndex 找超过半数的，办法很简单，直接排序，然后取前半数个,找到最大值，一起更新
 //注意判断term！
 //fixme
 func (rf *Raft) LeaderUpdateCommitIndex() {
@@ -259,7 +259,7 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 }
 
 //生成新任务
-func (rf *Raft) generateNewTask(peerIndex int, clearChannel bool) *Task {
+func (rf *Raft) generateNewTask(peerIndex int) *Task {
 	nextIndex := rf.IndexBig2Small(rf.nextIndex[peerIndex])
 	Assert(nextIndex <= len(rf.log),
 		fmt.Sprintf("nextIndex=%d,rf.log=%+v,snap=%d,next origin=%d", nextIndex, rf.log, rf.snapshotIndex, rf.nextIndex[peerIndex]))
@@ -334,7 +334,6 @@ func (rf *Raft) backward(peerIndex int, reply *AppendEntriesReply) {
 			rf.me, reply.ConflictTerm, rf.nextIndex[peerIndex])
 	}
 	//不过这种情况似乎不会发生。。
-	//fixme ?
 	if rf.nextIndex[peerIndex] <= rf.matchIndex[peerIndex] {
 		Debug(dCommit, "WARN：回退nextIndex %d 的时候，竟然小于等于MatchIndex %d 了！修正为macthIndex+1!",
 			rf.me, rf.nextIndex[peerIndex], rf.matchIndex[peerIndex])
@@ -398,7 +397,7 @@ func Max(a int, b int) int {
 	}
 }
 
-//完全覆盖版本的copy
+// Copy 完全覆盖版本的copy
 func Copy(dst, src []LogEntry) []LogEntry {
 	Assert(len(dst) == 0, "")
 	for _, i := range src {
@@ -407,11 +406,23 @@ func Copy(dst, src []LogEntry) []LogEntry {
 	return dst
 }
 
-//结构体成员变量必须是大写！否则无法拷贝成功！
+// DeepCopy 结构体成员变量必须是大写！否则无法拷贝成功！
 func DeepCopy(dst, src interface{}) error {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(src); err != nil {
 		return err
 	}
 	return gob.NewDecoder(bytes.NewBuffer(buf.Bytes())).Decode(dst)
+}
+
+//输入状态机的index，从1开始，找到smallIndex，如果没找到的话，
+//如果index太小了，小于所有的log就为-1，否则如果太大了，大于所有的log，就为-2
+func (rf *Raft) findSmallIndex(index int) int {
+	smallIndex := 0
+	for ; smallIndex < len(rf.log); smallIndex++ {
+		if rf.log[smallIndex].Index == index-1 {
+			break
+		}
+	}
+	return smallIndex
 }

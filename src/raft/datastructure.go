@@ -14,7 +14,7 @@ const (
 	CANDIDATE State = 3
 )
 
-//
+// RequestVoteArgs
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
@@ -25,7 +25,7 @@ type RequestVoteArgs struct {
 	LastLogTerm  int
 }
 
-//
+// RequestVoteReply
 // example RequestVote RPC Reply structure.
 // field names must start with capital letters!
 //
@@ -55,14 +55,14 @@ type LogEntry struct {
 	Command interface{}
 }
 
-//发送线程的任务
+// Task 发送线程的任务
 type Task struct {
 	RpcErrorCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{})
 	//Reply 用于传指针，实现reply的初始化，完成rpc
 	//返回值为是否重试 参数都是指针，reply需要初始化，所以如果重试的话，需要在callback中初始化
 	//这个callback会在超时或者rpc返回false时调用
 
-	RpcSuccessCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task)
+	RpcSuccessCallback func(peerIndex int, rf *Raft, args interface{}, reply interface{})
 	Args               interface{} //发送的内容
 	Reply              interface{}
 	RpcMethod          string //rpc 方法名
@@ -81,7 +81,7 @@ type Raft struct {
 	dead       int32               // set by Kill()
 	applyCh    chan ApplyMsg       //用于把commit的日志输出，从而实现测试。。
 	n          int                 //总共几个节点
-	fuckerChan chan *ApplyMsg      //测试用例里的appchan是同步队列，在2D中很容易阻塞，所以加一个缓冲区。。
+	fuckerChan chan *ApplyMsg      //测试用例里的apply chan是同步队列，在2D中很容易阻塞，所以加一个缓冲区。。
 
 	state         State
 	stateChanging chan *ChangedState
@@ -107,7 +107,7 @@ type Raft struct {
 	log              []LogEntry
 }
 
-//
+// ApplyMsg
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set

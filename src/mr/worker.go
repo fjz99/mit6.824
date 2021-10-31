@@ -13,15 +13,6 @@ import "log"
 import "net/rpc"
 import "hash/fnv"
 
-//todo down了的话，master清除文件映射
-//todo map任务在的机器挂了的话，需要重做
-//todo 重做map重复问题
-//fixme 似乎有日志输出文件的时候，测试shell脚本执行会很慢
-//fixme 日志输出文件名
-
-//todo map完成之后再挂了相关的问题：1.任务队列中的任务的输入需要完全改动，需要手动读出所有任务，然后重新放进去
-//2. 维护一个谁做了map的Map，而且在finish时添加
-//3.维护每个reduce任务的输入的map也需要先删除输入，在添加新的（数组原地修改就行）
 type KeyValue struct {
 	Key   string
 	Value string
@@ -39,7 +30,7 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-// main/mrworker.go calls this function.
+// Worker main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	mu := &sync.Mutex{}

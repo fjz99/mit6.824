@@ -141,7 +141,7 @@ func TestManyElections2A(t *testing.T) {
 		i1 := rand.Int() % servers
 		i2 := rand.Int() % servers
 		i3 := rand.Int() % servers
-		fmt.Printf("fuck! [Turn %d] 断开的节点是 %d %d %d\n", ii, i1, i2, i3)
+		//fmt.Printf("fuck! [Turn %d] 断开的节点是 %d %d %d\n", ii, i1, i2, i3)
 		cfg.disconnect(i1)
 		cfg.disconnect(i2)
 		cfg.disconnect(i3)
@@ -149,7 +149,7 @@ func TestManyElections2A(t *testing.T) {
 		// either the current leader should still be alive,
 		// or the remaining four should elect a new one.
 		cfg.checkOneLeader()
-		fmt.Printf("fuck! [Turn %d] 开始进行节点重连 %d %d %d\n", ii, i1, i2, i3)
+		//fmt.Printf("fuck! [Turn %d] 开始进行节点重连 %d %d %d\n", ii, i1, i2, i3)
 		cfg.connect(i1)
 		cfg.connect(i2)
 		cfg.connect(i3)
@@ -245,10 +245,10 @@ func TestFailAgree2B(t *testing.T) {
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
-	fmt.Println("fuck! test ", 106)
+	//fmt.Println("fuck! test ", 106)
 	cfg.one(106, servers, true)
 	time.Sleep(RaftElectionTimeout)
-	fmt.Println("fuck! test ", 107)
+	//fmt.Println("fuck! test ", 107)
 	cfg.one(107, servers, true)
 
 	cfg.end()
@@ -872,7 +872,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	nup := servers
 	//fixme
 	for iters := 0; iters < 1000; iters++ {
-		fmt.Println("iters=", iters)
+		//fmt.Println("iters=", iters)
 		if iters == 200 {
 			cfg.setlongreordering(true) //某些响应的delay非常长
 		}
@@ -1084,7 +1084,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
-		fmt.Println("iter= ", i)
+		//fmt.Println("iter= ", i)
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {

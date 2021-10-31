@@ -1,6 +1,6 @@
 package raft
 
-//处理其他server的 vote rpc
+// RequestVote 处理其他server的 vote rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	Debug(dVote, "接收到 S%d 的投票请求 %+v", rf.me, args.CandidateId, *args)
 	rf.mu.Lock()
@@ -68,7 +68,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.state == CANDIDATE {
 		rf.ChangeState(FOLLOWER)
 	}
-	//用于candidatie转换为follower
+	//用于candidate转换为follower
 	//偶然间发现的bug，事实上，可能有一个term相同的candidate，但是另一个选举成功了，所以此时收到了leaderId转换
 
 	if args.Log == nil || len(args.Log) == 0 {

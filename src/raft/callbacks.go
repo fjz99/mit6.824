@@ -4,19 +4,16 @@ package raft
 func voteRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//req := Args.(*RequestVoteArgs
 
 	Debug(dVote, "S%d -> S%d 选举 RPC失败，不重试 state=%d", rf.me, rf.me, peerIndex, rf.state)
 	rf.doneRPCs++ //return false才这样！
 	rf.broadCastCondition.Broadcast()
-	//rf.waitGroup.Done()
-	return
 }
 
-func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
+func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//req := Args.(*RequestVoteArgs)
+
 	resp := reply.(*RequestVoteReply)
 	rf.doneRPCs++
 	if resp.Term > rf.term {
@@ -31,17 +28,15 @@ func voteRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply int
 	} else {
 		Debug(dVote, "接收到S%d返回拒绝投票！！", rf.me, peerIndex)
 	}
-	//rf.waitGroup.Done()
 	rf.broadCastCondition.Broadcast()
 }
 
 func heartBeatRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc失败！", rf.me, peerIndex)
-	return
 }
 
 //这里，假如选为leader之后，在init的地方for循环多次发送的话，因为外部加的是for循环整体的锁，而回调函数需要锁，所以阻塞了所有的回调函数，导致发送队列阻塞
-func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
+func heartBeatRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	Debug(dLeader, "leader：对 S%d发送心跳rpc成功！", rf.me, peerIndex)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -63,13 +58,11 @@ func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, 
 	//重试之前也要生成新的任务
 	if rf.matchIndex[peerIndex] != -1 {
 		//不是刚开始的backward阶段
-		newTask := rf.generateNewTask(peerIndex, true)
+		newTask := rf.generateNewTask(peerIndex)
 		Assert(newTask != nil, "")
 		rf.senderChannel[peerIndex] <- newTask
 		Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试,新的日志为%s,%+v", rf.me, peerIndex, newTask.RpcMethod, newTask.Args)
 	} else {
-		//rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
-		//fixme
 
 		req := args.(*AppendEntriesArgs)
 		//重试不要通过返回true来实现，而要通过自己手动添加到chan来实现,这样就可以完成自己复制一个Task就不会完成任何冲突
@@ -80,10 +73,9 @@ func appendEntriesRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, 
 		rf.senderChannel[peerIndex] <- newTask
 		Debug(dCommit, "leader：对 S%d发送日志log rpc失败,自动重试,日志不变，为%s,%+v", rf.me, peerIndex, newTask.RpcMethod, newTask.Args)
 	}
-	return
 }
 
-func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
+func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	Debug(dCommit, "leader：对 S%d发送日志log rpc成功！", rf.me, peerIndex)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -104,11 +96,10 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 		if rf.matchIndex[peerIndex] < reqMaxIndex {
 			rf.matchIndex[peerIndex] = reqMaxIndex
 			rf.LeaderUpdateCommitIndex()
+			//nextIndex check
+			rf.nextIndex[peerIndex] = reqMaxIndex + 1 //有意义才更新，避免直接更新nextIndex导致指针后退!!
 		}
 
-		//nextIndex check
-		rf.nextIndex[peerIndex] = reqMaxIndex + 1
-		//这个不要最大值。。因为初始化的时候是乐观估计，是leader的log最大值
 		Debug(dCommit, "接收到S%d返回，日志复制成功,修改matchIndex=%d，nextIndex=%d", rf.me, peerIndex,
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 	} else {
@@ -117,10 +108,7 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 			rf.matchIndex[peerIndex], rf.nextIndex[peerIndex])
 	}
 
-	//todo 任务不对劲的情况下，发送快照
-	//需要在rpc参数中提供给状态机的快照index，否则无法给状态机
-
-	newTask := rf.generateNewTask(peerIndex, true) //可能接受到快照任务
+	newTask := rf.generateNewTask(peerIndex) //可能接受到快照任务
 	//这个阻塞过程会导致发送线程无法返回。。就导致无法广播心跳等,所以要异步执行
 	for newTask == nil {
 		if rf.state != LEADER {
@@ -133,7 +121,7 @@ func appendEntriesRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, 
 			rf.matchIndex[peerIndex], len(rf.log))
 		rf.logAppendCondition.Wait() //todo稍微等一会？当leader commit超过这个的时候，可以攒一波log
 
-		newTask = rf.generateNewTask(peerIndex, true)
+		newTask = rf.generateNewTask(peerIndex)
 	}
 
 	Debug(dCommit, "给S%d生成任务完成，task.args=%+v", rf.me, peerIndex, newTask.Args)
@@ -146,11 +134,8 @@ func snapshotRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply
 	Debug(dSnap, "对S%d发送快照失败,自动重试", rf.me, peerIndex)
 
 	req := args.(*InstallSnapshotArgs)
-	//复制一份直接重试即可
 
-	//rf.cleanupSenderChannelFor(peerIndex) //也可以清空发送队列,否则网络分区故障之后，会因为chan size不足而死锁
-	//fixme
-
+	//注意使用最新的快照，而不要直接复制一份
 	thisArgs := &InstallSnapshotArgs{rf.term, rf.leaderId, rf.snapshot, req.Done,
 		req.Offset, rf.snapshotIndex, rf.snapshotMachineIndex,
 		rf.snapshotTerm}
@@ -161,13 +146,12 @@ func snapshotRpcFailureCallback(peerIndex int, rf *Raft, args interface{}, reply
 	Debug(dCommit, "leader：对S%d发送快照失败,自动重试,args，为%+v", rf.me, peerIndex, newTask.Args)
 }
 
-func snapshotRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}, task *Task) {
+func snapshotRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	resp := reply.(*InstallSnapshotReply)
 	req := args.(*InstallSnapshotArgs)
-	//todo 不用更新commitId，因为快照本身就是在commitId内的，由状态机生成的
 	if resp.Term > rf.term {
 		Debug(dTerm, "快照rpc： 接收到S%d返回，但是term大于当前服务器S%d,被降级", rf.me, peerIndex, rf.me)
 		rf.increaseTerm(resp.Term, -1)
@@ -176,16 +160,16 @@ func snapshotRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply
 	}
 
 	Debug(dSnap, "快照rpc： 对S%d发送快照成功,自动生成AE rpc", rf.me, peerIndex)
-	//更新matchIndex,nextIndex自动在生成快照任务的地方修改了
+	//更新matchIndex,nextIndex
 	if rf.matchIndex[peerIndex] < req.LastIncludedIndex {
 		rf.matchIndex[peerIndex] = req.LastIncludedIndex
-		//rf.LeaderUpdateCommitIndex()
+		//rf.LeaderUpdateCommitIndex() 不需要更新，因为snapshot肯定低于commitIndex
+		rf.nextIndex[peerIndex] = req.LastIncludedIndex + 1 //有意义才更新
 	}
-	rf.nextIndex[peerIndex] = req.LastIncludedIndex + 1 //fixme，如果乱序了呢？
 
 	//做法相同。。
-	//!todo newTask还可能是snapshot？？
-	newTask := rf.generateNewTask(peerIndex, true)
+	//newTask还可能是snapshot!!
+	newTask := rf.generateNewTask(peerIndex)
 	//这个阻塞过程会导致发送线程无法返回。。就导致无法广播心跳等,所以要异步执行
 	for newTask == nil {
 		if rf.state != LEADER {
@@ -198,9 +182,9 @@ func snapshotRpcSuccessCallback(peerIndex int, rf *Raft, args interface{}, reply
 			rf.matchIndex[peerIndex], len(rf.log))
 		rf.logAppendCondition.Wait() //todo稍微等一会？当leader commit超过这个的时候，可以攒一波log
 
-		newTask = rf.generateNewTask(peerIndex, true)
+		newTask = rf.generateNewTask(peerIndex)
 	}
 
-	Debug(dCommit, "快照rpc： 给S%d生成任务完成，task.args=%+v", rf.me, peerIndex, newTask.Args) //fixme
+	Debug(dCommit, "快照rpc： 给S%d生成任务完成，task.args=%+v", rf.me, peerIndex, newTask.Args)
 	rf.senderChannel[peerIndex] <- newTask
 }
