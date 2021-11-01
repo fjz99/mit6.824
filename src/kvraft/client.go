@@ -2,23 +2,31 @@ package kvraft
 
 import (
 	"6.824/labrpc"
-	"fmt"
+	"6.824/raft"
+	"sync"
+	"time"
 )
 import "crypto/rand"
 import "math/big"
 
+//todo 并发保护
 const (
 	REGISTER  string = "KVServer.ClientRegister"
 	GET       string = "KVServer.ClientQuery"
 	PutAppend string = "KVServer.ClientRequest"
 )
 
+const NoLeaderSleepTime = time.Duration(100) * time.Millisecond
+
 type Clerk struct {
-	servers    []*labrpc.ClientEnd
-	leaderId   int
-	clientId   int
-	sequenceId int
-	n          int
+	servers     []*labrpc.ClientEnd
+	mu          sync.Locker //保证初始化，毕竟是阻塞客户端。。其他操作都是阻塞的
+	leaderIndex int
+	clientId    int
+	sequenceId  int
+	n           int
+	nowIndex    int
+	fuckerId    int64
 }
 
 func nrand() int64 {
@@ -33,47 +41,60 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	ck.clientId = -1
 	ck.sequenceId = 0
-	ck.leaderId = -1
+	ck.leaderIndex = -1 //这个id是相对于这个数组的索引
+	ck.mu = raft.NewReentrantLock()
 	ck.n = len(ck.servers)
-	ck.InitClient()
+	ck.nowIndex = -1
+	ck.fuckerId = nrand() % 5
+	Debug(dClient, "初始化client %d成功", ck.fuckerId)
+	//go ck.InitClient() //不要同步执行，因为测试用例里是同步调用这个方法的，否则会卡主
 	return ck
+}
+
+func (ck *Clerk) NextServer() int {
+	ck.nowIndex = (ck.nowIndex + 1) % ck.n
+	return ck.nowIndex
 }
 
 // InitClient 注册client
 func (ck *Clerk) InitClient() {
-	Debug(dClient, "开始初始化client")
-	Assert(ck.clientId == -1, "")
-	fmt.Println(ck.servers[0].Call(REGISTER, &ClientRegisterArgs{}, &ClientRegisterReply{}))
-	fmt.Println(ck.servers[0].Call(GET, &ClientRegisterArgs{}, &ClientRegisterReply{}))
-	fmt.Println(ck.servers[0].Call("KVServer.Get", &ClientRegisterArgs{}, &ClientRegisterReply{}))
 
+	Debug(dClient, "C%d 开始注册client", ck.fuckerId)
+	Assert(ck.clientId == -1, "")
 	for {
 		args := &ClientRegisterArgs{}
 		reply := &ClientRegisterReply{}
-		ok := false
-		if ck.leaderId != -1 {
-			Debug(dClient, "开始初始化client：FFFFFFFFF")
-			ok = ck.servers[ck.leaderId].Call(REGISTER, args, reply)
+		server := -1
+		if ck.leaderIndex != -1 {
+			server = ck.leaderIndex
 		} else {
 			//随机选取一个
-			Debug(dClient, "开始初始化client：GGGGGGGGGGG %d %+v", ck.randServer(), ck.servers[ck.randServer()])
-			ok = ck.servers[ck.randServer()].Call(REGISTER, args, reply)
+			server = ck.NextServer()
 		}
+
+		Debug(dClient, "C%d 开始注册client：开始处理，对%d请求", ck.fuckerId, server)
+		ok := ck.servers[server].Call(REGISTER, args, reply)
+
 		if ok {
-			Debug(dClient, "开始初始化client：请求返回%+v", *reply)
-			ck.leaderId = reply.LeaderHint //只要有leader就一定会返回，如果没有就是-1
+			Debug(dClient, "C%d 开始注册client：请求返回%+v", ck.fuckerId, *reply)
+			ck.leaderIndex = -1
+
 			if reply.Status == OK {
+				ck.leaderIndex = server
 				ck.clientId = reply.ClientId
 				break
+			} else if reply.Status == ErrNoLeader {
+				Debug(dClient, "C%d 开始注册client：NO LEADER！sleep 一段时间，等待选举完成", ck.fuckerId)
+				time.Sleep(NoLeaderSleepTime) //等待选举完成
 			}
 		} else {
 			//异常的话就重试
-			ck.leaderId = -1
-			Debug(dClient, "开始初始化client：请求返回false")
+			ck.leaderIndex = -1
+			Debug(dClient, "C%d 开始注册client：rpc请求返回false", ck.fuckerId)
 		}
 	}
 	Assert(ck.clientId != -1, "")
-	Debug(dClient, "初始化client成功，id=%d", ck.clientId)
+	Debug(dClient, "C%d 注册client成功，id=%d,切换为这个id", ck.fuckerId, ck.clientId)
 }
 
 //
@@ -89,35 +110,50 @@ func (ck *Clerk) InitClient() {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-	Debug(dClient, "clientId=%d 调用get，key=%s", ck.clientId, key)
+
+	if ck.clientId == -1 {
+		//同步初始化
+		ck.InitClient()
+	}
+
+	Debug(dClient, "C%d 调用get，key=%s", ck.clientId, key)
 	r := ""
 	for {
 		args := &ClientQueryArgs{Key: key}
 		reply := &ClientQueryReply{}
 		ok := false
-		if ck.leaderId != -1 {
-			ok = ck.servers[ck.leaderId].Call(GET, args, reply)
+		server := -1
+		if ck.leaderIndex != -1 {
+			server = ck.leaderIndex
 		} else {
 			//随机选取一个
-			ok = ck.servers[ck.randServer()].Call(GET, args, reply)
+			server = ck.NextServer()
 		}
+
+		ok = ck.servers[server].Call(GET, args, reply)
+
 		if ok {
-			Debug(dClient, "clientId=%d 调用get，key=%s：请求返回%+v", ck.clientId, key, *reply)
-			ck.leaderId = reply.LeaderHint //只要有leader就一定会返回，如果没有就是-1
+			Debug(dClient, "C%d 调用get，key=%s：请求返回%+v", ck.clientId, key, *reply)
+			ck.leaderIndex = -1
 			if reply.Status == OK {
 				r = reply.Response
+				ck.leaderIndex = server
 				break
 			} else if reply.Status == ErrNoKey {
 				r = ""
+				ck.leaderIndex = server
 				break
+			} else if reply.Status == ErrNoLeader {
+				Debug(dClient, "C%d NO LEADER！sleep 一段时间，等待选举完成", ck.clientId)
+				time.Sleep(NoLeaderSleepTime) //等待选举完成
 			}
 		} else {
 			//异常的话就重试
-			ck.leaderId = -1
-			Debug(dClient, "clientId=%d 调用get，key=%s：请求返回false", ck.clientId, key)
+			ck.leaderIndex = -1
+			Debug(dClient, "C%d 调用get，key=%s：请求返回false", ck.clientId, key)
 		}
 	}
-	Debug(dClient, "clientId=%d 调用get，key=%s,返回%s", ck.clientId, key, r)
+	Debug(dClient, "C%d 调用get，key=%s,返回%s", ck.clientId, key, r)
 	return r
 }
 
@@ -136,7 +172,12 @@ func (ck *Clerk) randServer() int {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	Debug(dClient, "clientId=%d 调用PutAppend %s，key=%s,value=%s", ck.clientId, op, key, value)
+	if ck.clientId == -1 {
+		//同步初始化
+		ck.InitClient()
+	}
+
+	Debug(dClient, "C%d 调用PutAppend %s，key=%s,value='%s'", ck.clientId, op, key, value)
 	seqId := ck.sequenceId
 	ck.sequenceId++
 	data := Op{}
@@ -151,34 +192,39 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		reply := &ClientRequestReply{}
 		ok := false
 		server := -1
-		if ck.leaderId != -1 {
-			server = ck.leaderId
+		if ck.leaderIndex != -1 {
+			server = ck.leaderIndex
 		} else {
-			server = ck.randServer()
+			server = ck.NextServer()
 			//随机选取一个
 		}
 
 		ok = ck.servers[server].Call(PutAppend, args, reply)
 
 		if ok {
-			Debug(dClient, "clientId=%d 调用PutAppend：请求返回%+v", ck.clientId, *reply)
-			ck.leaderId = reply.LeaderHint //只要有leader就一定会返回，如果没有就是-1
+			Debug(dClient, "C%d 调用PutAppend：请求返回%+v", ck.clientId, *reply)
+			ck.leaderIndex = -1
 			if reply.Status == OK || reply.Status == ErrNoKey {
 				//append的情况下才会发生ErrNoKey
+				ck.leaderIndex = server
 				break
+			} else if reply.Status == ErrNoLeader {
+				Debug(dClient, "C%d NO LEADER！sleep 一段时间，等待选举完成", ck.clientId)
+				time.Sleep(NoLeaderSleepTime) //等待选举完成
 			}
 		} else {
 			//异常的话就重试
-			ck.leaderId = -1
-			Debug(dClient, "clientId=%d 调用PutAppend：请求返回false", ck.clientId)
+			ck.leaderIndex = -1
+			Debug(dClient, "C%d 调用PutAppend：请求返回false", ck.clientId)
 		}
 	}
-	Debug(dClient, "clientId=%d 调用PutAppend 返回", ck.clientId)
+	Debug(dClient, "C%d 调用PutAppend 返回", ck.clientId)
 }
 
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+
 	ck.PutAppend(key, value, "Append")
 }

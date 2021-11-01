@@ -157,7 +157,7 @@ func (rf *Raft) persistState() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-	Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	//Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 func (rf *Raft) persistAll() {
@@ -176,8 +176,8 @@ func (rf *Raft) persistAll() {
 	data1 := w1.Bytes()
 	data2 := w2.Bytes()
 	rf.persister.SaveStateAndSnapshot(data1, data2)
-	Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
-		"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	//Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
+	//	"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readSnapshotPersist(data []byte) {
@@ -199,8 +199,8 @@ func (rf *Raft) readSnapshotPersist(data []byte) {
 		rf.snapshotMachineIndex = mi
 		rf.snapshotTerm = st
 	}
-	Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
-		rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	//Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
+	//	rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readPersist(data []byte) {
@@ -221,7 +221,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.voteFor = voteFor
 		rf.log = log
 	}
-	Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	//Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //

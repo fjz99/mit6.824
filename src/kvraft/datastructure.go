@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"6.824/labrpc"
 	"6.824/raft"
 	"sync"
 )
@@ -99,4 +100,5 @@ type KVServer struct {
 	stateMachine map[string]string           //状态机
 	lastApplied  int                         //因为有chan，不用也行，但是有的话可以构建从1开始的，忽略nil的id
 	output       map[int]*StateMachineOutput //对应index的输出
+	servers      []*labrpc.ClientEnd
 }

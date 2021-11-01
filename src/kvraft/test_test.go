@@ -1,6 +1,10 @@
 package kvraft
 
-import "6.824/porcupine"
+import (
+	"6.824/labrpc"
+	"6.824/porcupine"
+	"runtime"
+)
 import "6.824/models"
 import "testing"
 import "strconv"
@@ -713,4 +717,27 @@ func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 func TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, random keys, many clients (3B) ...
 	GenericTest(t, "3B", 15, 7, true, true, true, 1000, true)
+}
+
+func TestLab3FuckClient(t *testing.T) {
+	runtime.GOMAXPROCS(4) //GO最大CPU数目
+
+	rn := labrpc.MakeNetwork()
+	defer rn.Cleanup()
+
+	e := rn.MakeEnd("testEnd")
+
+	js := &KVServer{} //RPC方法具体修改这个结构体
+	svc := labrpc.MakeService(js)
+
+	rs := labrpc.MakeServer()
+	rs.AddService(svc)
+	rn.AddServer("server!", rs)
+
+	rn.Connect("testEnd", "server!")
+	rn.Enable("testEnd", true)
+
+	reply := &ClientRegisterReply{}
+	fmt.Println(e.Call(REGISTER, &ClientRegisterArgs{}, reply))
+	fmt.Println("FKFKFKFKF", *reply)
 }

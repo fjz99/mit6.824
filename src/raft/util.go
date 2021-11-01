@@ -5,10 +5,8 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -63,16 +61,16 @@ func Debug(topic logTopic, format string, a ...interface{}) {
 
 //从环境变量获得日志级别
 func getVerbosity() int {
-	v := os.Getenv("VERBOSE")
+	//v := os.Getenv("VERBOSE")
 	level := 0
-	if v != "" {
-		var err error
-		level, err = strconv.Atoi(v)
-		if err != nil {
-			log.Fatalf("Invalid verbosity %v", v)
-		}
-	}
-	return level
+	//if v != "" {
+	//	var err error
+	//	level, err = strconv.Atoi(v)
+	//	if err != nil {
+	//		log.Fatalf("Invalid verbosity %v", v)
+	//	}
+	//}
+	return level //为了测试kvraft
 }
 
 // ResetTimer caller heartbeat; appendEntry; election timeout;vote others

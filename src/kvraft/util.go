@@ -74,23 +74,23 @@ func Assert(normal bool, msg interface{}) {
 	}
 }
 
-//todo
 //等到状态机做完到index,返回对应的状态机运行结果
+//外部必须提供锁，否则无法cond
 func (kv *KVServer) waitFor(index int) *StateMachineOutput {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	Debug(dServer, "S%d waitFor index=%d", kv.me, index)
 
 	for kv.lastApplied < index {
-		kv.commitIndexCond.Wait()
+		kv.commitIndexCond.Wait() //这里的wait无法释放所有的重入的lock，只会释放一层。。
+		//Debug(dServer, "S%d waitFor 被唤醒，此时index=%d，等待的index=%d", kv.me, kv.lastApplied, index)
 	}
 	output := kv.output[index]
 	delete(kv.output, index)
-	Debug(dServer, "waitFor 返回 %+v", *output)
+	Debug(dServer, "S%d waitFor 返回 %+v", kv.me, *output)
 	return output
 }
 
-func (kv *KVServer) buildCmd(op *Op, id int, seqId int) *Command {
-	return &Command{*op, id, seqId, raft.GetNow()}
+func (kv *KVServer) buildCmd(op *Op, id int, seqId int) Command {
+	return Command{*op, id, seqId, raft.GetNow()}
 }
 
 //被状态机调用，用来判断是否已经执行
