@@ -76,16 +76,23 @@ func Assert(normal bool, msg interface{}) {
 
 //等到状态机做完到index,返回对应的状态机运行结果
 //外部必须提供锁，否则无法cond
+//必须指定超时时间，然后每隔一段时间检查一次，因为可能本来是leader
 func (kv *KVServer) waitFor(index int) *StateMachineOutput {
 	Debug(dServer, "S%d waitFor index=%d", kv.me, index)
 
 	for kv.lastApplied < index {
 		kv.commitIndexCond.Wait() //这里的wait无法释放所有的重入的lock，只会释放一层。。
 		//Debug(dServer, "S%d waitFor 被唤醒，此时index=%d，等待的index=%d", kv.me, kv.lastApplied, index)
+		id := kv.rf.GetLeaderId()
+		if id != kv.me {
+			//因为互斥性，此时可能被取代了
+			Debug(dServer, "S%d waitFor 发现自己已经被取代，新的leader为S%d", kv.me, id)
+			return &StateMachineOutput{ErrWrongLeader, nil}
+		}
 	}
 	output := kv.output[index]
 	delete(kv.output, index)
-	Debug(dServer, "S%d waitFor 返回 %+v", kv.me, *output)
+	Debug(dServer, "S%d waitFor 返回index=%d,data=%+v", kv.me, index, *output)
 	return output
 }
 

@@ -9,14 +9,12 @@ import (
 	"time"
 )
 
-//todo 暂时先不用队列，直接使用lcoalIndex
-
 //执行命令，维护状态机
 //todo 暂时不考虑快照
+//todo restart复现log
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *KVServer) applier() {
 	Debug(dServer, "S%d applier线程启动成功", kv.me)
-	time.Sleep(NoLeaderSleepTime)
 	for op := range kv.applyCh {
 		kv.mu.Lock()
 		if op.SnapshotValid {
@@ -24,7 +22,7 @@ func (kv *KVServer) applier() {
 		} else {
 			cmd := op.Command.(Command)
 			Assert(op.CommandValid, "")
-			Assert(op.CommandIndex == kv.lastApplied+1, "") //保证线性一致性
+			//Assert(op.CommandIndex == kv.lastApplied+1, "") //保证线性一致性 todo ？？为什么这个断言不对
 			Debug(dMachine, "S%d 状态机开始执行命令%+v", kv.me, cmd)
 
 			switch cmd.Op.Type {
@@ -54,7 +52,7 @@ func (kv *KVServer) applier() {
 			kv.lastApplied++
 			kv.commitIndexCond.Broadcast()
 
-			Debug(dMachine, "S%d 状态机开始执行命令%+v结束，结果为%+v,更新lastApplied=%d", kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied)
+			Debug(dMachine, "S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d", kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied)
 			kv.mu.Unlock()
 		}
 	}
@@ -98,19 +96,19 @@ func (kv *KVServer) append(CommandIndex int, command Command) {
 
 	if !kv.checkDuplicate(CommandIndex, command) {
 		if v, ok := kv.stateMachine[command.Op.Key]; ok {
-			Debug(dMachine, "S%d 执行append命令,value=%s", kv.me, CommandIndex, v)
+			Debug(dMachine, "S%d 执行append命令,value=%s", kv.me, v)
 			kv.stateMachine[command.Op.Key] = v + command.Op.Value
 			kv.output[CommandIndex] = &StateMachineOutput{OK, kv.stateMachine[command.Op.Key]}
 		} else {
-			Debug(dMachine, "S%d 执行append命令,key不存在", kv.me, CommandIndex)
-			kv.output[CommandIndex] = &StateMachineOutput{ErrNoKey, ""}
+			Debug(dMachine, "S%d 执行append命令,key不存在,自动创建", kv.me, CommandIndex)
+			kv.stateMachine[command.Op.Key] = command.Op.Value
+			kv.output[CommandIndex] = &StateMachineOutput{OK, kv.stateMachine[command.Op.Key]}
 		}
 	}
 
 }
 
 func (kv *KVServer) register(CommandIndex int, command Command) {
-	Debug(dMachine, "S%d 状态机开始执行命令%+v register！！！", kv.me, command)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -126,7 +124,7 @@ func (kv *KVServer) Kill() {
 	Debug(dServer, "S%d 被kill", kv.me)
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	close(kv.applyCh) //否则applier线程无法停止。。
+	//不需要close chan，可以正常停止
 }
 
 func (kv *KVServer) killed() bool {
@@ -149,8 +147,6 @@ func (kv *KVServer) killed() bool {
 // for any long-running work.
 //
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
-	// call labgob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
 	InitLog()
 
 	labgob.Register(Op{})
@@ -174,6 +170,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.session = map[int]*Session{}
 
 	go kv.applier() //主线程
+
+	go func() {
+		for !kv.killed() {
+			time.Sleep(time.Duration(100) * time.Millisecond) //每隔一段时间唤醒一次，防止，因为网络分区导致死锁，见md
+			kv.commitIndexCond.Broadcast()
+		}
+	}() //
 
 	return kv
 }

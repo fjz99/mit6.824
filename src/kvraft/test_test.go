@@ -1,9 +1,7 @@
 package kvraft
 
 import (
-	"6.824/labrpc"
 	"6.824/porcupine"
-	"runtime"
 )
 import "6.824/models"
 import "testing"
@@ -251,7 +249,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		clnts[i] = make(chan int)
 	}
 	for i := 0; i < 3; i++ {
-		// log.Printf("Iteration %v\n", i)
+		//log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
@@ -272,7 +270,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 				}
 				nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
 				if (rand.Int() % 1000) < 500 {
-					// log.Printf("%d: client new append %v\n", cli, nv)
+					//log.Printf("%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv, opLog, cli)
 					if !randomkeys {
 						last = NextValue(last, nv)
@@ -284,7 +282,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					Put(cfg, myck, key, nv, opLog, cli)
 					j++
 				} else {
-					// log.Printf("%d: client new get %v\n", cli, key)
+					//log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key, opLog, cli)
 					// the following check only makes sense when we're not using random keys
 					if !randomkeys && v != last {
@@ -305,7 +303,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
 		if partitions {
-			// log.Printf("wait for partitioner\n")
+			//log.Printf("wait for partitioner\n")
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
@@ -332,15 +330,15 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
-		// log.Printf("wait for clients\n")
+		//log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			// log.Printf("read from clients %d\n", i)
+			//log.Printf("read from clients %d\n", i)
 			j := <-clnts[i]
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
 			key := strconv.Itoa(i)
-			// log.Printf("Check %v for client %d\n", j, i)
+			//log.Printf("Check %v for client %d\n", j, i)
 			v := Get(cfg, ck, key, opLog, 0)
 			if !randomkeys {
 				checkClntAppends(t, i, v, j)
@@ -717,27 +715,4 @@ func TestSnapshotUnreliableRecoverConcurrentPartition3B(t *testing.T) {
 func TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable3B(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, snapshots, random keys, many clients (3B) ...
 	GenericTest(t, "3B", 15, 7, true, true, true, 1000, true)
-}
-
-func TestLab3FuckClient(t *testing.T) {
-	runtime.GOMAXPROCS(4) //GO最大CPU数目
-
-	rn := labrpc.MakeNetwork()
-	defer rn.Cleanup()
-
-	e := rn.MakeEnd("testEnd")
-
-	js := &KVServer{} //RPC方法具体修改这个结构体
-	svc := labrpc.MakeService(js)
-
-	rs := labrpc.MakeServer()
-	rs.AddService(svc)
-	rn.AddServer("server!", rs)
-
-	rn.Connect("testEnd", "server!")
-	rn.Enable("testEnd", true)
-
-	reply := &ClientRegisterReply{}
-	fmt.Println(e.Call(REGISTER, &ClientRegisterArgs{}, reply))
-	fmt.Println("FKFKFKFKF", *reply)
 }

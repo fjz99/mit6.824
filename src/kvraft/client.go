@@ -16,7 +16,7 @@ const (
 	PutAppend string = "KVServer.ClientRequest"
 )
 
-const NoLeaderSleepTime = time.Duration(100) * time.Millisecond
+const NoLeaderSleepTime = time.Duration(50) * time.Millisecond
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
@@ -205,7 +205,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			Debug(dClient, "C%d 调用PutAppend：请求返回%+v", ck.clientId, *reply)
 			ck.leaderIndex = -1
 			if reply.Status == OK || reply.Status == ErrNoKey {
-				//append的情况下才会发生ErrNoKey
+				//其实永远不会发生ErrNoKey。。
 				ck.leaderIndex = server
 				break
 			} else if reply.Status == ErrNoLeader {

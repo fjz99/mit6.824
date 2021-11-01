@@ -61,8 +61,8 @@ func Debug(topic logTopic, format string, a ...interface{}) {
 
 //从环境变量获得日志级别
 func getVerbosity() int {
-	//v := os.Getenv("VERBOSE")
 	level := 0
+	//v := os.Getenv("VERBOSE")
 	//if v != "" {
 	//	var err error
 	//	level, err = strconv.Atoi(v)
@@ -259,15 +259,16 @@ func (rf *Raft) LeaderUpdateCommitIndex() {
 //生成新任务
 func (rf *Raft) generateNewTask(peerIndex int) *Task {
 	nextIndex := rf.IndexBig2Small(rf.nextIndex[peerIndex])
-	Assert(nextIndex <= len(rf.log),
-		fmt.Sprintf("nextIndex=%d,rf.log=%+v,snap=%d,next origin=%d", nextIndex, rf.log, rf.snapshotIndex, rf.nextIndex[peerIndex]))
+
 	if rf.state != LEADER {
 		return nil
 	}
 
+	Assert(nextIndex <= len(rf.log),
+		fmt.Sprintf("S%d peerIndex=%d nextIndex=%d,rf.log=%+v,snap=%d,next origin=%d", rf.me, peerIndex, nextIndex, rf.log, rf.snapshotIndex, rf.nextIndex[peerIndex]))
+
 	if nextIndex == len(rf.log) {
 		Debug(dTrace, "对于S%d index=%d，我的lenLog=%d 没有任务可以生成", rf.me, peerIndex, nextIndex, len(rf.log))
-		//todo 如果没有任务生成的话，就等待在cond上，即只需要leader启动一次nil，后面都不需要给chan添加任务了
 		return nil
 	}
 
@@ -425,7 +426,7 @@ func (rf *Raft) findSmallIndex(index int) int {
 	return smallIndex
 }
 
-//下面是给kv使用的
+// GetLeaderId 下面是给kv使用的
 func (rf *Raft) GetLeaderId() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

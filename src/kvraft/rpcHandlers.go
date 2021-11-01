@@ -18,7 +18,12 @@ func (kv *KVServer) ClientRegister(args *ClientRegisterArgs, reply *ClientRegist
 		}
 	} else {
 		output := kv.waitFor(index)
-		*reply = ClientRegisterReply{leaderId, output.Data.(int), OK}
+		Debug(dServer, "S%d register debug output = %+v", kv.me, output)
+		if output.Status == ErrWrongLeader {
+			*reply = ClientRegisterReply{kv.rf.GetLeaderId(), -1, ErrWrongLeader}
+		} else {
+			*reply = ClientRegisterReply{leaderId, output.Data.(int), OK}
+		}
 	}
 	Debug(dServer, "S%d ClientRegister rpc,返回 %+v", kv.me, *reply)
 }
@@ -41,7 +46,11 @@ func (kv *KVServer) ClientQuery(args *ClientQueryArgs, reply *ClientQueryReply) 
 		}
 	} else {
 		output := kv.waitFor(index)
-		*reply = ClientQueryReply{leaderId, output.Status, output.Data.(string)}
+		if output.Status == ErrWrongLeader {
+			*reply = ClientQueryReply{kv.rf.GetLeaderId(), ErrWrongLeader, ""}
+		} else {
+			*reply = ClientQueryReply{leaderId, output.Status, output.Data.(string)}
+		}
 	}
 	Debug(dServer, "S%d ClientQuery rpc,返回  %+v", kv.me, *reply)
 }
@@ -65,7 +74,11 @@ func (kv *KVServer) ClientRequest(args *ClientRequestArgs, reply *ClientRequestR
 		}
 	} else {
 		output := kv.waitFor(index)
-		*reply = ClientRequestReply{leaderId, output.Status}
+		if output.Status == ErrWrongLeader {
+			*reply = ClientRequestReply{kv.rf.GetLeaderId(), output.Status}
+		} else {
+			*reply = ClientRequestReply{leaderId, output.Status}
+		}
 	}
 	Debug(dServer, "S%d ClientRequest rpc,返回  %+v", kv.me, *reply)
 }
