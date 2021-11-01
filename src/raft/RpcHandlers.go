@@ -28,7 +28,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				rf.me, args.CandidateId, args, lasLogIndex, rf.term, rf.voteFor)
 			rf.ResetTimer() //！！
 			rf.voteFor = args.CandidateId
-			rf.persist()
+			rf.persistState()
 			*reply = RequestVoteReply{Term: rf.term, VoteGranted: true}
 		} else {
 			Debug(dVote, "拒绝给S%d投票,因为args=%+v,lastLogIndex=%d", rf.me, args.CandidateId, args, lasLogIndex)
@@ -186,7 +186,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		//获得返回值
 		Debug(dCommit, "日志复制完成", rf.me)
-		rf.persist()
+		rf.persistState()
 		*reply = AppendEntriesReply{Term: rf.term, Success: true, ConflictIndex: -1, ConflictTerm: -1}
 	}
 }
@@ -246,7 +246,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		Debug(dSnap, "快照对应的index位置没找到,清空log数组", rf.me)
 		rf.log = []LogEntry{}
 	}
-	rf.persist()
+	rf.persistAll()
 
 	//发送快照到apply chan
 	go func() {

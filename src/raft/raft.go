@@ -88,7 +88,7 @@ func (rf *Raft) broadcastVote() {
 	}
 	rf.term++
 	rf.voteFor = rf.me
-	rf.persist() //此方法内部没有lock
+	rf.persistState() //此方法内部没有lock
 	rf.doneRPCs = 0
 	rf.agreeCounter = 1
 	rf.LeaderId = -1
@@ -149,20 +149,58 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 //即使是log数组，也可以恢复，只要过半崩溃
-func (rf *Raft) persist() {
+func (rf *Raft) persistState() {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.term)
 	e.Encode(rf.voteFor) //注意这两个是有顺序的，，毕竟是成为byte数组。。
 	e.Encode(rf.log)
-	e.Encode(rf.snapshot)
-	e.Encode(rf.snapshotIndex)
-	e.Encode(rf.snapshotMachineIndex)
-	e.Encode(rf.snapshotTerm)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-	Debug(dPersist, "保存持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
+	Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+}
+
+func (rf *Raft) persistAll() {
+	w1 := new(bytes.Buffer)
+	e1 := labgob.NewEncoder(w1)
+	e1.Encode(rf.term)
+	e1.Encode(rf.voteFor) //注意这两个是有顺序的，，毕竟是成为byte数组。。
+	e1.Encode(rf.log)
+
+	w2 := new(bytes.Buffer)
+	e2 := labgob.NewEncoder(w2)
+	e2.Encode(rf.snapshot)
+	e2.Encode(rf.snapshotIndex)
+	e2.Encode(rf.snapshotMachineIndex)
+	e2.Encode(rf.snapshotTerm)
+	data1 := w1.Bytes()
+	data2 := w2.Bytes()
+	rf.persister.SaveStateAndSnapshot(data1, data2)
+	Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
 		"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+}
+
+func (rf *Raft) readSnapshotPersist(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var si, st, mi int
+	var ss []byte
+	if d.Decode(&ss) != nil ||
+		d.Decode(&si) != nil ||
+		d.Decode(&mi) != nil ||
+		d.Decode(&st) != nil {
+		panic("decode err")
+	} else {
+		rf.snapshot = ss
+		rf.snapshotIndex = si
+		rf.snapshotMachineIndex = mi
+		rf.snapshotTerm = st
+	}
+	Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
+		rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readPersist(data []byte) {
@@ -174,27 +212,16 @@ func (rf *Raft) readPersist(data []byte) {
 	var term int
 	var voteFor int
 	var log []LogEntry
-	var si, st, mi int
-	var ss []byte
 	if d.Decode(&term) != nil ||
 		d.Decode(&voteFor) != nil ||
-		d.Decode(&log) != nil ||
-		d.Decode(&ss) != nil ||
-		d.Decode(&si) != nil ||
-		d.Decode(&mi) != nil ||
-		d.Decode(&st) != nil {
+		d.Decode(&log) != nil {
 		panic("decode err")
 	} else {
 		rf.term = term
 		rf.voteFor = voteFor
 		rf.log = log
-		rf.snapshot = ss
-		rf.snapshotIndex = si
-		rf.snapshotMachineIndex = mi
-		rf.snapshotTerm = st
 	}
-	Debug(dPersist, "读取持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
-		rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //
@@ -268,7 +295,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.TrimLog(smallIndex)
 
 	//持久化
-	rf.persist()
+	rf.persistAll()
 	Debug(dSnap, "更新快照信息为snapshotIndex=%d，term=%d", rf.me, rf.snapshotIndex, rf.snapshotTerm)
 
 }
@@ -291,7 +318,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	} else {
 		rf.log = append(rf.log, LogEntry{Term: rf.term, Index: lastLog.Index + 1, Command: command})
 	}
-	rf.persist()
+	rf.persistState()
 	rf.logAppendCondition.Broadcast()
 	thisIndex := rf.IndexSmall2Big(len(rf.log) - 1)
 	localLastLog := rf.log[len(rf.log)-1] //因为可能并发修改
@@ -530,6 +557,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//放在这里也行，毕竟是同步执行的，而且此时ticker线程还没启动，不用加锁
 	rf.readPersist(persister.ReadRaftState())
+	rf.readSnapshotPersist(persister.ReadSnapshot())
 	if rf.voteFor == rf.me {
 		rf.increaseTerm(rf.term+1, -1)
 	}

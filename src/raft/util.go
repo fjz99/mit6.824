@@ -216,7 +216,7 @@ func (rf *Raft) increaseTerm(newTerm int, leaderId int) {
 	Assert(rf.term < newTerm, "")
 	rf.voteFor = -1 //重置
 	rf.term = newTerm
-	rf.persist()
+	rf.persistState()
 	rf.LeaderId = leaderId
 	rf.ChangeState(FOLLOWER)
 	Debug(dTerm, "set Term = %d", rf.me, newTerm)
