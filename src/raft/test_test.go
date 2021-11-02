@@ -21,17 +21,17 @@ const RaftElectionTimeout = 1000 * time.Millisecond
 
 //my tests
 
-func TestGenerateNewTask(t *testing.T) {
-	rf := &Raft{}
-	rf.me = 0
-	rf.n = 3
-	rf.nextIndex = make([]int, 3)
-	rf.nextIndex[1] = 2
-	rf.matchIndex = make([]int, 3)
-	rf.matchIndex[1] = 1
-	rf.log = []LogEntry{{}, {}, {}, {}, {}, {}, {}}
-	//rf.generateNewTask(1, true, false)
-}
+//func TestGenerateNewTask(t *testing.T) {
+//	rf := &Raft{}
+//	rf.me = 0
+//	rf.n = 3
+//	rf.nextIndex = make([]int, 3)
+//	rf.nextIndex[1] = 2
+//	rf.matchIndex = make([]int, 3)
+//	rf.matchIndex[1] = 1
+//	rf.log = []LogEntry{{}, {}, {}, {}, {}, {}, {}}
+//	//rf.generateNewTask(1, true, false)
+//}
 
 func TestDeepCopy(t *testing.T) {
 	args := &AppendEntriesArgs{}
@@ -46,16 +46,16 @@ func TestDeepCopy(t *testing.T) {
 	fmt.Printf("%+v\n", newTask.Args)
 }
 
-func TestBackward(t *testing.T) {
-	rf := &Raft{}
-	rf.me = 0
-	rf.n = 3
-	rf.nextIndex = make([]int, 3)
-	rf.nextIndex[1] = 3
-	rf.log = []LogEntry{{1, -1, nil}, {1, 0, 1}, {1, 1, 2},
-		{1, 2, 3}, {1, 3, 4}, {1, 4, 5}}
-	rf.backward(1, &AppendEntriesReply{ConflictIndex: 2, ConflictTerm: -1})
-}
+//func TestBackward(t *testing.T) {
+//	rf := &Raft{}
+//	rf.me = 0
+//	rf.n = 3
+//	rf.nextIndex = make([]int, 3)
+//	rf.nextIndex[1] = 3
+//	rf.log = []LogEntry{{1, -1, nil}, {1, 0, 1}, {1, 1, 2},
+//		{1, 2, 3}, {1, 3, 4}, {1, 4, 5}}
+//	rf.backward(1, &AppendEntriesReply{ConflictIndex: 2, ConflictTerm: -1})
+//}
 
 //their tests
 
@@ -1084,7 +1084,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
-		//fmt.Println("iter= ", i)
+		fmt.Println("iter= ", i)
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {

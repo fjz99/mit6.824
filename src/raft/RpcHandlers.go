@@ -75,7 +75,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//心跳
 		Debug(dLog, "接收到 leader:S%d 的心跳 rpc", rf.me, args.LeaderId)
 
-		rf.FollowerUpdateCommitIndex(args.LeaderCommit) //!
+		rf.FollowerUpdateCommitIndex(args) //!
 
 		*reply = AppendEntriesReply{Term: rf.term, Success: true}
 	} else {
@@ -158,7 +158,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 
 			//删除的情况下，结尾就是新的matchIndex
-			rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], rf.IndexSmall2Big(len(rf.log)-1))
+			//rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], rf.IndexSmall2Big(len(rf.log)-1))
 			Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 		} else {
 			//匹配不到，查看是到达哪个边界了
@@ -170,20 +170,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				}
 
 				//追加的情况下，结尾就是新的matchIndex
-				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], rf.IndexSmall2Big(len(rf.log)-1))
+				//rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], rf.IndexSmall2Big(len(rf.log)-1))
 				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			} else {
 				Debug(dCommit, "WARN:这次日志复制中，leader S%d 发送的日志是follower日志的子集！", rf.me, rf.LeaderId)
 
 				//子集的情况下，子集的结尾才是新的matchIndex！！！
 				Debug(dTrace, "fuck!!更新前matchIndex= %d len=%d,+=%d", rf.me, rf.matchIndex[rf.me], len(args.Log), args.PrevLogIndex+len(args.Log))
-				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], args.PrevLogIndex+len(args.Log))
+				//rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], args.PrevLogIndex+len(args.Log))
 				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			}
 		}
 		Debug(dCommit, "我日志复制的结果为 %+v", rf.me, rf.log)
 
-		rf.FollowerUpdateCommitIndex(args.LeaderCommit)
+		rf.FollowerUpdateCommitIndex(args)
 
 		//获得返回值
 		Debug(dCommit, "日志复制完成", rf.me)
@@ -252,7 +252,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	//发送快照到apply chan
 	go func() {
 		rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
-			SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm} //index从一开始，所以返回+1
+			SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
 	}()
 	Debug(dSnap, "follower接收到S%d的快照，更新完成！", rf.me, args.LeaderId)
 }

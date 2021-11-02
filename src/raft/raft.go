@@ -31,6 +31,9 @@ func (rf *Raft) messageSender(peerIndex int) {
 
 	for !rf.killed() {
 		task := <-ch
+		if rf.killed() {
+			return
+		}
 
 		Debug(dLog2, prefix+"对 S%d 发送请求 %+v", rf.me, peerIndex, peerIndex, task.Args)
 
@@ -157,7 +160,7 @@ func (rf *Raft) persistState() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-	//Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 func (rf *Raft) persistAll() {
@@ -176,8 +179,8 @@ func (rf *Raft) persistAll() {
 	data1 := w1.Bytes()
 	data2 := w2.Bytes()
 	rf.persister.SaveStateAndSnapshot(data1, data2)
-	//Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
-	//	"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
+		"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readSnapshotPersist(data []byte) {
@@ -199,8 +202,8 @@ func (rf *Raft) readSnapshotPersist(data []byte) {
 		rf.snapshotMachineIndex = mi
 		rf.snapshotTerm = st
 	}
-	//Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
-	//	rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
+		rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readPersist(data []byte) {
@@ -221,7 +224,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.voteFor = voteFor
 		rf.log = log
 	}
-	//Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //
@@ -246,6 +249,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		Debug(dSnap, "CondInstallSnapshot请求 返回true,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
 		return false
 	} else {
+		rf.commitIndex = rf.snapshotIndex //更新commitId
 		Debug(dSnap, "CondInstallSnapshot请求 返回false,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
 		return true
 	}
@@ -372,7 +376,7 @@ func (rf *Raft) broadCastHeartBeat() {
 			//Debug(dTrace, "对 S%d发送心跳", rf.me, i)
 
 			if len(rf.senderChannel[i]) == 0 && rf.IndexBig2Small(rf.matchIndex[i]) == len(rf.log)-1 {
-				args := &AppendEntriesArgs{rf.term, nil, -1, -1, rf.commitIndex, rf.me}
+				args := &AppendEntriesArgs{rf.term, nil, rf.matchIndex[i], -1, rf.commitIndex, rf.me}
 				rf.senderChannel[i] <- &Task{heartBeatRpcFailureCallback, heartBeatRpcSuccessCallback,
 					args, &AppendEntriesReply{}, "Raft.AppendEntries"}
 			} else {
@@ -558,6 +562,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//放在这里也行，毕竟是同步执行的，而且此时ticker线程还没启动，不用加锁
 	rf.readPersist(persister.ReadRaftState())
 	rf.readSnapshotPersist(persister.ReadSnapshot())
+	if rf.snapshotIndex != -1 {
+		//发送快照到apply chan
+		go func() {
+			rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
+				SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
+		}()
+		Debug(dSnap, "raft启动时读取snapshot，index=%d，修正index=%d", rf.me, rf.snapshotIndex, rf.snapshotMachineIndex)
+	}
 	if rf.voteFor == rf.me {
 		rf.increaseTerm(rf.term+1, -1)
 	}

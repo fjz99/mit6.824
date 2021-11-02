@@ -158,11 +158,25 @@ func (rf *Raft) ApplyMsg2B(thisEntry *LogEntry, index int) {
 	}
 }
 
-func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
-	myMatchIndex := rf.matchIndex[rf.me]
-	Debug(dTrace, "进入FollowerUpdateCommitIndex,matchIndex=%d,commitId=%d,leaderCommit=%d", rf.me,
-		myMatchIndex, rf.commitIndex, LeaderCommit)
-	c := Min(LeaderCommit, myMatchIndex) //follower就不用唤醒cond了
+func (rf *Raft) FollowerUpdateCommitIndex(args *AppendEntriesArgs) {
+	//myMatchIndex := rf.matchIndex[rf.me]
+	//Debug(dTrace, "进入FollowerUpdateCommitIndex,matchIndex=%d,commitId=%d,leaderCommit=%d", rf.me,
+	//	myMatchIndex, rf.commitIndex, LeaderCommit)
+
+	//c := Min(LeaderCommit, myMatchIndex) //follower就不用唤醒cond了
+	if rf.commitIndex < rf.snapshotIndex {
+		//快照还没有安装
+		//fixme 加入挂了的话，重启的时候commitId=-1，此时如果不更新的话，就会超时
+		Debug(dTrace, "快照index=%d，commitIndex=%d，快照还没有安装，拒绝更新commitId", rf.me, rf.snapshotIndex, rf.commitIndex)
+		return
+	}
+	temp := -1
+	if args.Log == nil {
+		temp = Min(args.LeaderCommit, args.PrevLogIndex) //对应 commitId
+	} else {
+		temp = Min(args.LeaderCommit, args.PrevLogIndex+len(args.Log))
+	}
+	c := Max(rf.commitIndex, temp)
 	//注意空entry就不用apply了。。
 	//注意，在有了快照的时候，如果直接安装快照的话，就无法发送log entry了
 	for i := rf.commitIndex + 1; i <= c; i++ {
@@ -170,7 +184,7 @@ func (rf *Raft) FollowerUpdateCommitIndex(LeaderCommit int) {
 			localLog := rf.log[rf.IndexBig2Small(i)]
 			rf.ApplyMsg2B(&localLog, i) //这里不能持有锁！会死锁
 		} else {
-			Debug(dTrace, "无法发送测试数据，因为比快照早，具体i=%d，snapIndex=%d", i, rf.snapshotIndex)
+			Debug(dTrace, "无法发送测试数据，因为比快照早，具体i=%d，snapIndex=%d", rf.me, i, rf.snapshotIndex)
 		}
 	}
 
