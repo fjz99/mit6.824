@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,7 @@ import (
 //执行命令，维护状态机
 //todo 暂时不考虑快照
 //todo restart复现log
+//todo 一个节点认为自己是leader，但是网络分区了，此时应该超时重试，返回errNoleader
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *KVServer) applier() {
 	Debug(dServer, "S%d applier线程启动成功", kv.me)
@@ -22,8 +24,8 @@ func (kv *KVServer) applier() {
 		} else {
 			cmd := op.Command.(Command)
 			Assert(op.CommandValid, "")
-			//Assert(op.CommandIndex == kv.lastApplied+1, "") //保证线性一致性 todo ？？为什么这个断言不对
-			Debug(dMachine, "S%d 状态机开始执行命令%+v", kv.me, cmd)
+			Debug(dMachine, "S%d 状态机开始执行命令%+v,index=%d", kv.me, cmd, op.CommandIndex)
+			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op)) //保证线性一致性 todo ？？为什么这个断言不对
 
 			switch cmd.Op.Type {
 			case PutType:

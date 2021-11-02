@@ -176,6 +176,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				Debug(dCommit, "WARN:这次日志复制中，leader S%d 发送的日志是follower日志的子集！", rf.me, rf.LeaderId)
 
 				//子集的情况下，子集的结尾才是新的matchIndex！！！
+				Debug(dTrace, "fuck!!更新前matchIndex= %d len=%d,+=%d", rf.me, rf.matchIndex[rf.me], len(args.Log), args.PrevLogIndex+len(args.Log))
 				rf.matchIndex[rf.me] = Max(rf.matchIndex[rf.me], args.PrevLogIndex+len(args.Log))
 				Debug(dTrace, "更新matchIndex为 %d", rf.me, rf.matchIndex[rf.me])
 			}

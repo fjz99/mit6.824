@@ -86,6 +86,8 @@ func (ck *Clerk) InitClient() {
 			} else if reply.Status == ErrNoLeader {
 				Debug(dClient, "C%d 开始注册client：NO LEADER！sleep 一段时间，等待选举完成", ck.fuckerId)
 				time.Sleep(NoLeaderSleepTime) //等待选举完成
+			} else if reply.Status == ErrWrongLeader {
+				Debug(dClient, "C%d 注册client：不是leader，重试", ck.clientId)
 			}
 		} else {
 			//异常的话就重试
@@ -146,6 +148,8 @@ func (ck *Clerk) Get(key string) string {
 			} else if reply.Status == ErrNoLeader {
 				Debug(dClient, "C%d NO LEADER！sleep 一段时间，等待选举完成", ck.clientId)
 				time.Sleep(NoLeaderSleepTime) //等待选举完成
+			} else if reply.Status == ErrWrongLeader {
+				Debug(dClient, "C%d 调用get：不是leader，重试", ck.clientId)
 			}
 		} else {
 			//异常的话就重试
@@ -211,7 +215,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			} else if reply.Status == ErrNoLeader {
 				Debug(dClient, "C%d NO LEADER！sleep 一段时间，等待选举完成", ck.clientId)
 				time.Sleep(NoLeaderSleepTime) //等待选举完成
+			} else if reply.Status == ErrWrongLeader {
+				Debug(dClient, "C%d 调用PutAppend：不是leader，重试", ck.clientId)
 			}
+
 		} else {
 			//异常的话就重试
 			ck.leaderIndex = -1

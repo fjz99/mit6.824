@@ -2,6 +2,7 @@ package kvraft
 
 import (
 	"6.824/porcupine"
+	"log"
 )
 import "6.824/models"
 import "testing"
@@ -191,6 +192,7 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 				}
 			}
 		}
+		fmt.Println("par ", pa[0], pa[1])
 		cfg.partition(pa[0], pa[1])
 		time.Sleep(electionTimeout + time.Duration(rand.Int63()%200)*time.Millisecond)
 	}
@@ -303,8 +305,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
 		if partitions {
-			//log.Printf("wait for partitioner\n")
-			<-ch_partitioner
+			log.Printf("wait for partitioner\n")
+			<-ch_partitioner //等待一次分区完。。
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
 			// won't return until that server discovers a new term
