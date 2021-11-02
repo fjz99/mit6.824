@@ -34,7 +34,8 @@ chan中发送的数据的index会放到测试程序log数组中的对应位置�
 20. //Assert(thisLog.Term <= args.PrevLogTerm, "") //否则不会选举为leader，其实不是的。。严格按照fig2来，直接判断相等即可
 即leader发送的前驱的term，对应的本地log的term相比，可能小，因为可能涉及多次leader变更，见e-108.log
 具体原因是，三个掉线的节点选举速度太慢了，导致本来的leader的term增加之后（当然这个曾经的leader会拒绝投票。。），自己超时了，所以term+1，所以把他废黜了
-![](./2b-1.jpg)
+![](./2b-1.jpg) <br/>
+![](./2b-2.jpg)
 21. 一种很罕见的case是，test的时候发现s2是leader，然后调用one进行提交的时候，s2又刚好被降级了。。所以就报错leader2 rejected Start()
 22. TestRejoin2B 对应我的代码的一个问题，就是我是根据leader的commitId和自己的log的最小值进行更新自己的commitId的，但是此时就会发送错误的数据到chan，
 这个其实在应用上没有区别，因为应用的时候**可以**不需要chan，当然如果根据chan来实现应用的话，就需要避免这种情况，对应e-1.log。

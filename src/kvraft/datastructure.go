@@ -69,10 +69,11 @@ type ClientQueryReply struct {
 	Response   string
 }
 
+// Session 快照也需要保存这个
 type Session struct {
-	clientId       int
-	lastSequenceId int
-	lastOp         Op
+	ClientId       int
+	LastSequenceId int
+	LastOp         Op
 }
 
 type StateMachineOutput struct {
@@ -94,11 +95,12 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	session   map[int]*Session //会话
-	sessionId int              //会话id生成器
+	session     map[int]*Session //会话；也要快照
+	sessionSeed int              //会话id生成器；也要快照
 
-	stateMachine map[string]string           //状态机
-	lastApplied  int                         //因为有chan，不用也行，但是有的话可以构建从1开始的，忽略nil的id
-	output       map[int]*StateMachineOutput //对应index的输出
+	stateMachine map[string]string           //状态机；也要快照
+	lastApplied  int                         //因为有chan，不用也行，但是有的话可以构建从1开始的，忽略nil的id；不用快照
+	output       map[int]*StateMachineOutput //对应index的输出；不需要快照，只要重新执行命令即可
 	servers      []*labrpc.ClientEnd
+	persister    *raft.Persister
 }

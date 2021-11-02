@@ -1,7 +1,9 @@
 package kvraft
 
 import (
+	"6.824/labgob"
 	"6.824/raft"
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -105,7 +107,7 @@ func (kv *KVServer) buildCmd(op *Op, id int, seqId int) Command {
 //返回值是是否重复
 func (kv *KVServer) checkDuplicate(CommandIndex int, command Command) bool {
 	if s, ok := kv.session[command.ClientId]; ok {
-		if s.lastSequenceId >= command.SequenceId {
+		if s.LastSequenceId >= command.SequenceId {
 			//不执行,因为只有put，所以也不用返回。。
 			Debug(dServer, "S%d 检查会话，会话已存在 cmd=%+v,session=%+v", command, *s)
 			kv.output[CommandIndex] = &StateMachineOutput{OK, ""}
@@ -113,12 +115,53 @@ func (kv *KVServer) checkDuplicate(CommandIndex int, command Command) bool {
 		} else {
 			//todo 这里必须保证单增，即线性一致性
 
-			s.lastSequenceId = command.SequenceId
-			s.lastOp = command.Op
+			s.LastSequenceId = command.SequenceId
+			s.LastOp = command.Op
 			return false
 		}
 	} else {
 		//会话不存在
 		panic(1)
 	}
+}
+
+func (kv *KVServer) constructSnapshot() []byte {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	buf := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(buf)
+	encoder.Encode(kv.stateMachine)
+	encoder.Encode(kv.session)
+	encoder.Encode(kv.sessionSeed)
+
+	Debug(dServer, "S%d 创建快照完成，state=%+v,sessionMap=%+v,sessionSeed=%d",
+		kv.me, kv.stateMachine, kv.session, kv.sessionSeed)
+	return buf.Bytes()
+}
+
+func (kv *KVServer) readSnapshotPersist(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var sm map[string]string
+	var session map[int]*Session
+	var sseed int
+
+	if d.Decode(&sm) != nil ||
+		d.Decode(&session) != nil ||
+		d.Decode(&sseed) != nil {
+		panic("decode err")
+	} else {
+		kv.stateMachine = sm
+		kv.session = session
+		kv.sessionSeed = sseed
+	}
+	Debug(dServer, "S%d 读取snapshot持久化数据成功 state=%+v,sessionMap=%+v,sessionSeed=%d",
+		kv.me, kv.stateMachine, kv.session, kv.sessionSeed)
 }

@@ -15,11 +15,10 @@
 同样地，waitFor方法应该有个超时时间，避免网络分区造成无法过半，导致这个请求一直无法执行，从而一直卡死在wait处，即使客户端的rpc超时返回了，服务器还会卡在这里。。
 （即特殊一点，一个leader的某个index的日志因为网络分区无法提交，然后他被后来的leader截断日志了，此时假如没有新的commit的话，就会导致死锁。。）
 可以考虑加一个线程，每隔一段时间就唤醒cond一次。。
-13. assert被触发，说明raft有问题，检查日志，发现是有重复Index（从1开始忽略nil的）被提交，但是从0开始包括nil的是正常的。发现这个节点，提交一个Index（从1开始忽略nil的）日志后，
-被leader截断了，导致又提交了一个同Index的日志，但是commitId（从0开始包括nil的）没冲突。这说明选举leader错误，这个节点不该被选举，所以选举leader使用的index
-应该是从1开始忽略nil的！因为可能有的节点多次被选为leader，导致有多个nil，log很长，但是很多无意义的log，导致错误的被选为leader！
-很重要！
-同样得，传入rpc的term也得是有意义的term，因为nil的term太容易获得了
-一个具体的case如图：
-![](./3A.jpg)
+13. matchIndex只会增长的问题：follower自己的matchIndex需要在term修改是重新设置为commitId！或者不用macthIndex来更新commitId；
+可以在发送心跳的时候，pervIndex=leader存储的follower marchIndex，这样的话，follower根据这个和自己的commitId和leader的commitId来更新自己的commitId
+正常的日志复制请求中，可以通过prevIndex+len of args log和自己的commitId和leader的commitId来更新自己的commitId
+14. 一个节点认为自己是leader，但是网络分区了，此时我打代码会无限等待，直到分区结束为止
+15. 快照必须能够保证可以继续检测重复seqId
+对于普通的crash重启，状态机会自动重新执行log，commitId会重新增长，所以也能够执行register，来保存session。这也说明了，必须是由状态机来保存session
 

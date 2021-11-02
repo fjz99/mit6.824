@@ -1,0 +1,4 @@
+1. 快照必须能够保证可以继续检测重复seqId 
+对于普通的crash重启，状态机会自动重新执行log，commitId会重新增长，所以也能够执行register，来保存session。这也说明了，必须是由状态机来保存session
+而假设使用了快照的话，register等log都会消失，所以需要保存的有：state map；所有的有效的会话；
+lastApplied不用快照，apply chan中有index

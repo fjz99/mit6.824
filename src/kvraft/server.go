@@ -11,9 +11,7 @@ import (
 )
 
 //执行命令，维护状态机
-//todo 暂时不考虑快照
-//todo restart复现log
-//todo 一个节点认为自己是leader，但是网络分区了，此时应该超时重试，返回errNoleader
+//todo 快照
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *KVServer) applier() {
 	Debug(dServer, "S%d applier线程启动成功", kv.me)
@@ -21,11 +19,19 @@ func (kv *KVServer) applier() {
 		kv.mu.Lock()
 		if op.SnapshotValid {
 			Assert(!op.CommandValid, "")
+			//读取快照
+			if kv.rf.CondInstallSnapshot(op.SnapshotTerm, op.SnapshotIndex, op.Snapshot) {
+				Debug(dServer, "S%d 装载快照,快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
+				kv.readSnapshotPersist(op.Snapshot)
+				kv.lastApplied = op.SnapshotIndex
+			} else {
+				Debug(dServer, "S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
+			}
 		} else {
 			cmd := op.Command.(Command)
 			Assert(op.CommandValid, "")
 			Debug(dMachine, "S%d 状态机开始执行命令%+v,index=%d", kv.me, cmd, op.CommandIndex)
-			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op)) //保证线性一致性 todo ？？为什么这个断言不对
+			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op)) //保证线性一致性
 
 			switch cmd.Op.Type {
 			case PutType:
@@ -53,6 +59,12 @@ func (kv *KVServer) applier() {
 			}
 			kv.lastApplied++
 			kv.commitIndexCond.Broadcast()
+			//判断当前的字节数是否太大了
+			size := kv.persister.RaftStateSize()
+			if kv.maxraftstate > 0 && size >= kv.maxraftstate {
+				Debug(dServer, "S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.me, size, kv.maxraftstate)
+				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
+			}
 
 			Debug(dMachine, "S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d", kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied)
 			kv.mu.Unlock()
@@ -60,8 +72,6 @@ func (kv *KVServer) applier() {
 	}
 }
 
-//todo
-//todo 重复验证+保存最近的op
 func (kv *KVServer) put(CommandIndex int, command Command) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -115,11 +125,11 @@ func (kv *KVServer) register(CommandIndex int, command Command) {
 	defer kv.mu.Unlock()
 
 	Debug(dMachine, "S%d 执行register命令,index=%d,cmd=%+v", kv.me, CommandIndex, command)
-	session := &Session{kv.sessionId, -1, Op{Type: RegisterType}}
-	kv.session[session.clientId] = session
-	kv.output[CommandIndex] = &StateMachineOutput{OK, session.clientId}
-	Debug(dMachine, "S%d 执行register命令,分配sessionId=%d", kv.me, session.clientId)
-	kv.sessionId++
+	session := &Session{kv.sessionSeed, -1, Op{Type: RegisterType}}
+	kv.session[session.ClientId] = session
+	kv.output[CommandIndex] = &StateMachineOutput{OK, session.ClientId}
+	Debug(dMachine, "S%d 执行register命令,分配sessionId=%d", kv.me, session.ClientId)
+	kv.sessionSeed++
 }
 
 func (kv *KVServer) Kill() {
@@ -134,7 +144,7 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-//
+// StartKVServer
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant key/value service.
@@ -152,15 +162,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	InitLog()
 
 	labgob.Register(Op{})
-	labgob.Register(Command{}) //todo ??
+	labgob.Register(Command{})
 
 	kv := new(KVServer)
 	kv.servers = servers
 	kv.me = me
 	kv.n = len(servers)
-	kv.maxraftstate = maxraftstate
+	kv.maxraftstate = maxraftstate //raft 状态的最大允许大小（以字节为单位）
 	kv.mu = raft.NewReentrantLock()
 	kv.commitIndexCond = sync.NewCond(kv.mu)
+	kv.persister = persister
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
@@ -168,7 +179,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.lastApplied = 0
 	kv.output = make(map[int]*StateMachineOutput)
 	kv.stateMachine = map[string]string{}
-	kv.sessionId = 0
+	kv.sessionSeed = 0
 	kv.session = map[int]*Session{}
 
 	go kv.applier() //主线程
@@ -178,7 +189,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			time.Sleep(time.Duration(100) * time.Millisecond) //每隔一段时间唤醒一次，防止，因为网络分区导致死锁，见md
 			kv.commitIndexCond.Broadcast()
 		}
-	}() //
+	}()
 
 	return kv
 }

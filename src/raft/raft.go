@@ -160,7 +160,7 @@ func (rf *Raft) persistState() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-	Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	//Debug(dPersist, "保存state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 func (rf *Raft) persistAll() {
@@ -179,8 +179,8 @@ func (rf *Raft) persistAll() {
 	data1 := w1.Bytes()
 	data2 := w2.Bytes()
 	rf.persister.SaveStateAndSnapshot(data1, data2)
-	Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
-		"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	//Debug(dPersist, "保存all持久化数据成功 term=%d,voteFor=%d,log=%+v,snapshotIndex=%d,snapshotMachineIndex=%d,"+
+	//	"snapshotTerm=%d", rf.me, rf.term, rf.voteFor, rf.log, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readSnapshotPersist(data []byte) {
@@ -202,8 +202,8 @@ func (rf *Raft) readSnapshotPersist(data []byte) {
 		rf.snapshotMachineIndex = mi
 		rf.snapshotTerm = st
 	}
-	Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
-		rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
+	//Debug(dPersist, "读取snapshot持久化数据成功 snapshotIndex=%d,snapshotMachineIndex=%d,snapshotTerm=%d",
+	//	rf.me, rf.snapshotIndex, rf.snapshotMachineIndex, rf.snapshotTerm)
 }
 
 func (rf *Raft) readPersist(data []byte) {
@@ -224,7 +224,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.voteFor = voteFor
 		rf.log = log
 	}
-	Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
+	//Debug(dPersist, "读取state持久化数据成功 term=%d,voteFor=%d,log=%+v", rf.me, rf.term, rf.voteFor, rf.log)
 }
 
 //
@@ -512,6 +512,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
+// Make 这个方法是同步调用的，返回后才会进行日志提交等操作
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 
@@ -564,10 +565,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readSnapshotPersist(persister.ReadSnapshot())
 	if rf.snapshotIndex != -1 {
 		//发送快照到apply chan
-		go func() {
-			rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
-				SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
-		}()
+		//go func() {
+		//	//因为是异步的，就可能出现问题。。
+		//	rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
+		//		SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
+		//}()
+		rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
+			SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
+		//同步安装快照，否则不会执行接下来的任务，否则可能安装快照的时候，又有新的快照。。即data race
 		Debug(dSnap, "raft启动时读取snapshot，index=%d，修正index=%d", rf.me, rf.snapshotIndex, rf.snapshotMachineIndex)
 	}
 	if rf.voteFor == rf.me {
