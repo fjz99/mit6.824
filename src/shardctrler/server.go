@@ -17,7 +17,7 @@ import "6.824/labgob"
 // turn off debug output from this instance.
 //
 func (sc *ShardCtrler) Kill() {
-	Debug(dConfig, "S%d 被kill", sc.me)
+	Debug(dServer, "S%d 被kill", sc.me)
 	atomic.StoreInt32(&sc.dead, 1)
 	sc.rf.Kill()
 	sc.closeChan <- true
@@ -40,6 +40,8 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 // me is the index of the current server in servers[].
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardCtrler {
+	InitLog()
+
 	sc := new(ShardCtrler)
 	sc.me = me
 	sc.n = len(servers)
@@ -48,7 +50,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.configs[0].Groups = map[int][]string{}
 	sc.configs[0].Num = 0
 	for i := 0; i < NShards; i++ {
-		sc.configs[0].Shards[i] = i
+		sc.configs[0].Shards[i] = -1 //每个分片分配给哪个group
 	}
 
 	labgob.Register(Op{})

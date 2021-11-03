@@ -10,12 +10,12 @@ cd ../src/kvraft
 # Note: because the socketID is based on the current userID,
 # ./test-mr.sh cannot be run in parallel
 runs=$1
-chmod +x ../../.run/testLab3A.sh
+chmod +x ../../.run/testLab4A.sh
 rm -rf failedTests
 mkdir failedTests
 #!!!!!!!!!!!!!!!!!!!!1 10s
 for i in $(seq 1 "$runs"); do
-    timeout -k 2s 150s ../../.run/testLab3A.sh &
+    timeout -k 2s 150s ../../.run/testLab4A.sh &
     pid=$!
     if ! wait $pid; then
         echo '***' FAILED TESTS IN TRIAL "$i"

@@ -11,7 +11,6 @@ import (
 )
 
 //执行命令，维护状态机
-//todo 快照
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *KVServer) applier() {
 	Debug(dServer, "S%d applier线程启动成功", kv.me)
@@ -31,7 +30,15 @@ func (kv *KVServer) applier() {
 			cmd := op.Command.(Command)
 			Assert(op.CommandValid, "")
 			Debug(dMachine, "S%d 状态机开始执行命令%+v,index=%d", kv.me, cmd, op.CommandIndex)
-			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op)) //保证线性一致性
+			//Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op)) //保证线性一致性
+			//但是使用了快照之后，就不一定了，因为可能当前节点速度太慢，然后leader发送了快照，然后更新了快照，
+			//但是此时commitIndex对应的测试数据发出去了一部分,而且没消费完。。
+			//然后状态机安装了快照，但是读取到了raft接收到主节点快照之前发送的commit数据，就错误了
+			if op.CommandIndex <= kv.lastApplied {
+				kv.mu.Unlock()
+				continue
+			}
+			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op))
 
 			switch cmd.Op.Type {
 			case PutType:

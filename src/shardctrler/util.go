@@ -12,6 +12,8 @@ import (
 
 type logTopic string
 
+const DebugEnabled = true
+
 const (
 	dClient  logTopic = "CLNT"
 	dMachine logTopic = "MACH" //状态机
@@ -33,6 +35,9 @@ var logInitLock = sync.Mutex{}
 
 // InitLog 提前手动调用
 func InitLog() {
+	if !DebugEnabled {
+		return
+	}
 	logInitLock.Lock()
 	defer logInitLock.Unlock()
 	debugVerbosity = getVerbosity()
@@ -42,6 +47,9 @@ func InitLog() {
 }
 
 func Debug(topic logTopic, format string, a ...interface{}) {
+	if !DebugEnabled {
+		return
+	}
 	logInitLock.Lock()
 	defer logInitLock.Unlock()
 	if debugVerbosity >= 1 {

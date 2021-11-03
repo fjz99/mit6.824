@@ -30,7 +30,7 @@ const NShards = 10
 // Please don't change this.
 type Config struct {
 	Num    int              // config number
-	Shards [NShards]int     // shard -> gid
+	Shards [NShards]int     // shard -> gid，//每个分片分配给哪个group
 	Groups map[int][]string // gid -> servers[]
 }
 
@@ -126,6 +126,8 @@ type Command struct {
 	Timestamp  int64 //完成会话超时功能
 }
 
+// Op 简化处理，操作cmd可以直接是新的负载均衡后的结果，这样的话，状态机就2个cmd（一个是register）了；但是这样存在提交失败的情况，就需要回退
+//但是如果是update这样的SQL的话，保存状态就要保存很多，即物理日志
 type Op struct {
 	Type  OpType
 	Key   string
