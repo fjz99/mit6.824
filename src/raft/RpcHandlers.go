@@ -81,6 +81,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else {
 		Debug(dCommit, "接收到 leader:S%d 日志log rpc,leader=%+v,follower=%+v", rf.me, args.LeaderId, *args, rf.log)
 
+		if rf.snapshotIndex != -1 {
+			//检查快照早晚
+			if args.PrevLogIndex < rf.snapshotIndex {
+				//我的快照太晚了，所以忽略这个请求
+				//这样下次就会发送快照后面的了
+				*reply = AppendEntriesReply{rf.term, false, -1, rf.snapshotIndex + 1}
+				return
+			}
+		}
+
 		//检查日志索引位置是否存在
 		exists := true
 		thisLog := LogEntry{-1, -1, "args.PrevLogIndex == -1"}
@@ -96,7 +106,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			conflictTerm = -1
 		} else if smallPrevLogIndex < 0 {
 			//比数组小
-			Assert(smallPrevLogIndex == -1, "") //最多是前驱快照
+			//Assert(smallPrevLogIndex == -1, "") //最多是前驱快照，不一定!因为可能存在重复和乱序，因为是用自己的快照计算的，
+			//而接受到的是别人的前驱，自己的快照可能更新
+
 			exists = true
 			thisLog = LogEntry{-1, -1, "snapshot!"}
 		} else {

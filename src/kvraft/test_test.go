@@ -685,7 +685,7 @@ func TestSnapshotSize3B(t *testing.T) {
 	cfg.end()
 }
 
-func TestSpeed3B(t *testing.T) {
+func TestSpeed3B(t *testing.T) { //ok
 	GenericTestSpeed(t, "3B", 1000)
 }
 

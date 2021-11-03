@@ -58,17 +58,16 @@ func (kv *KVServer) applier() {
 				panic(1)
 			}
 			kv.lastApplied++
-			kv.commitIndexCond.Broadcast()
 			//判断当前的字节数是否太大了
 			size := kv.persister.RaftStateSize()
 			if kv.maxraftstate > 0 && size >= kv.maxraftstate {
 				Debug(dServer, "S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.me, size, kv.maxraftstate)
 				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
 			}
-
 			Debug(dMachine, "S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d", kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied)
-			kv.mu.Unlock()
 		}
+		kv.commitIndexCond.Broadcast() //装载快照的话，lastApplied也会变
+		kv.mu.Unlock()
 	}
 }
 

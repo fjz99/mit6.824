@@ -565,14 +565,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readSnapshotPersist(persister.ReadSnapshot())
 	if rf.snapshotIndex != -1 {
 		//发送快照到apply chan
-		//go func() {
-		//	//因为是异步的，就可能出现问题。。
-		//	rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
-		//		SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
-		//}()
-		rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
-			SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
-		//同步安装快照，否则不会执行接下来的任务，否则可能安装快照的时候，又有新的快照。。即data race
+		go func() {
+			//make内部得用新的线程
+			rf.mu.Lock() //防止死锁，因为是同步队列
+			b := make([]byte, len(rf.snapshot))
+			copy(b, rf.snapshot)
+			i := rf.snapshotMachineIndex
+			t := rf.snapshotTerm
+			rf.mu.Unlock()
+
+			rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: b,
+				SnapshotIndex: i, SnapshotTerm: t}
+		}()
 		Debug(dSnap, "raft启动时读取snapshot，index=%d，修正index=%d", rf.me, rf.snapshotIndex, rf.snapshotMachineIndex)
 	}
 	if rf.voteFor == rf.me {

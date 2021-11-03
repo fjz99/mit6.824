@@ -29,6 +29,7 @@ func (kv *KVServer) ClientRegister(args *ClientRegisterArgs, reply *ClientRegist
 }
 
 func (kv *KVServer) ClientQuery(args *ClientQueryArgs, reply *ClientQueryReply) {
+	Debug(dServer, "S%d 接收到ClientQuery rpc,args=%+v,临界区外！", kv.me, *args)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	Debug(dServer, "S%d 接收到ClientQuery rpc,args=%+v", kv.me, *args)
@@ -57,6 +58,7 @@ func (kv *KVServer) ClientQuery(args *ClientQueryArgs, reply *ClientQueryReply) 
 
 // ClientRequest 无论如何都提交日志，提交完状态机再考虑重复验证
 func (kv *KVServer) ClientRequest(args *ClientRequestArgs, reply *ClientRequestReply) {
+	Debug(dServer, "S%d 接收到ClientRequest rpc,args=%+v,临界区外！", kv.me, *args)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	Debug(dServer, "S%d 接收到ClientRequest rpc,args=%+v", kv.me, *args)

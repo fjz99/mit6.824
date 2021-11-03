@@ -93,6 +93,7 @@ func (ck *Clerk) InitClient() {
 			//异常的话就重试
 			ck.leaderIndex = -1
 			Debug(dClient, "C%d 开始注册client：rpc请求返回false", ck.fuckerId)
+			time.Sleep(time.Duration(5) * time.Millisecond)
 		}
 	}
 	Assert(ck.clientId != -1, "")
@@ -132,6 +133,7 @@ func (ck *Clerk) Get(key string) string {
 			server = ck.NextServer()
 		}
 
+		Debug(dClient, "C%d 调用get，key=%s：对S%d发起请求", ck.clientId, key, server)
 		ok = ck.servers[server].Call(GET, args, reply)
 
 		if ok {
@@ -155,6 +157,7 @@ func (ck *Clerk) Get(key string) string {
 			//异常的话就重试
 			ck.leaderIndex = -1
 			Debug(dClient, "C%d 调用get，key=%s：请求返回false", ck.clientId, key)
+			time.Sleep(time.Duration(5) * time.Millisecond)
 		}
 	}
 	Debug(dClient, "C%d 调用get，key=%s,返回%s", ck.clientId, key, r)
@@ -203,6 +206,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			//随机选取一个
 		}
 
+		Debug(dClient, "C%d 调用PutAppend：%+v 对S%d发起请求", ck.clientId, *args, server)
 		ok = ck.servers[server].Call(PutAppend, args, reply)
 
 		if ok {
@@ -223,6 +227,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			//异常的话就重试
 			ck.leaderIndex = -1
 			Debug(dClient, "C%d 调用PutAppend：请求返回false", ck.clientId)
+			time.Sleep(time.Duration(5) * time.Millisecond)
 		}
 	}
 	Debug(dClient, "C%d 调用PutAppend 返回", ck.clientId)
