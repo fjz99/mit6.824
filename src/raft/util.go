@@ -38,8 +38,13 @@ var debugStart time.Time
 var debugVerbosity int
 var logInitLock = sync.Mutex{}
 
+const EnableLog = false
+
 // InitLog 提前手动调用
 func InitLog() {
+	if !EnableLog {
+		return
+	}
 	logInitLock.Lock()
 	defer logInitLock.Unlock()
 	debugVerbosity = getVerbosity()
@@ -49,6 +54,9 @@ func InitLog() {
 }
 
 func Debug(topic logTopic, format string, a ...interface{}) {
+	if !EnableLog {
+		return
+	}
 	logInitLock.Lock()
 	defer logInitLock.Unlock()
 	if debugVerbosity >= 1 {

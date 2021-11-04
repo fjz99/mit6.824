@@ -126,8 +126,22 @@ func (sc *ShardCtrler) checkDuplicate(CommandIndex int, command Command) bool {
 	}
 }
 
-func (sc *ShardCtrler) reBalance() {
+func (sc *ShardCtrler) latestConfig() *Config {
+	if len(sc.configs) == 0 {
+		panic("1")
+	} else {
+		return &sc.configs[len(sc.configs)-1]
+	}
+}
 
+func CopyMap(src map[int][]string) map[int][]string {
+	res := map[int][]string{}
+	for k, v := range src {
+		arr := make([]string, len(v))
+		copy(arr, v)
+		res[k] = arr
+	}
+	return res
 }
 
 func HashString(key string) uint32 {
@@ -150,4 +164,13 @@ func randomString(len int) string {
 		bytes[i] = byte(randomInt(65, 90))
 	}
 	return string(bytes)
+}
+
+func ChangeArray2FixedArray(src []int) [NShards]int {
+	Assert(len(src) == NShards, "")
+	arr := [NShards]int{}
+	for i := 0; i < NShards; i++ {
+		arr[i] = src[i]
+	}
+	return arr
 }

@@ -10,6 +10,8 @@ import "6.824/labrpc"
 import "sync"
 import "6.824/labgob"
 
+//todo 改造为非hash方法
+
 // Kill
 // the tester calls Kill() when a ShardCtrler instance won't
 // be needed again. you are not required to do anything
@@ -20,7 +22,6 @@ func (sc *ShardCtrler) Kill() {
 	Debug(dServer, "S%d 被kill", sc.me)
 	atomic.StoreInt32(&sc.dead, 1)
 	sc.rf.Kill()
-	sc.closeChan <- true
 }
 
 func (sc *ShardCtrler) killed() bool {
@@ -54,6 +55,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	}
 
 	labgob.Register(Op{})
+	labgob.Register(Command{})
+
 	sc.applyCh = make(chan raft.ApplyMsg)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
 
@@ -64,6 +67,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.output = make(map[int]*StateMachineOutput)
 	sc.sessionSeed = 0
 	sc.session = map[int]int{}
+	sc.Hash = MakeHashRing(NShards)
 
 	go sc.applier()
 
@@ -120,24 +124,103 @@ func (sc *ShardCtrler) query(index int, cmd Command) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
+	Debug(dMachine, "S%d 执行query命令,index=%d,cmd=%+v", sc.me, index, cmd)
+	//Assert(cmd.Op.Num < len(sc.configs) && cmd.Op.Num >= 0, "")
+	if cmd.Op.Num == -1 {
+		sc.output[index] = &StateMachineOutput{OK, *sc.latestConfig()}
+	} else if cmd.Op.Num >= len(sc.configs) {
+		return
+	} else {
+		sc.output[index] = &StateMachineOutput{OK, sc.configs[cmd.Op.Num]}
+	}
+
+	Debug(dMachine, "S%d 执行query命令,返回%+v", sc.me, sc.output[index])
 }
 
 func (sc *ShardCtrler) move(index int, cmd Command) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
+	Debug(dMachine, "S%d 执行move命令,index=%d,cmd=%+v", sc.me, index, cmd)
+	//重复，不用设置值，output中是nil
+	if sc.checkDuplicate(index, cmd) {
+		return
+	}
+
+	op := cmd.Op
+	Assert(op.Shard < NShards && op.Shard >= 0, "")
+	latestConfig := sc.latestConfig()
+	if _, ok := latestConfig.Groups[op.GID]; !ok {
+		Debug(dMachine, "S%d 执行move命令,index=%d,cmd=%+v,GID不存在", sc.me, index, cmd)
+		return
+	}
+	assign := sc.Hash.Assign(op.GID, op.Shard)
+	thisConfig := Config{Num: len(sc.configs)}
+	groups := CopyMap(latestConfig.Groups)
+
+	thisConfig.Groups = groups
+	thisConfig.Shards = ChangeArray2FixedArray(assign)
+	sc.configs = append(sc.configs, thisConfig)
+
+	sc.output[index] = &StateMachineOutput{OK, thisConfig}
+	Debug(dMachine, "S%d 执行move命令,添加%+v", sc.me, thisConfig)
 }
 
 func (sc *ShardCtrler) join(index int, cmd Command) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
+	Debug(dMachine, "S%d 执行join命令,index=%d,cmd=%+v", sc.me, index, cmd)
+
+	//重复，不用设置值，output中是nil
+	if sc.checkDuplicate(index, cmd) {
+		return
+	}
+
+	latestConfig := sc.latestConfig()
+	thisConfig := Config{Num: len(sc.configs)}
+	groups := CopyMap(latestConfig.Groups)
+
+	for k, v := range cmd.Op.Servers {
+		sc.Hash.AddGroup(k)
+		groups[k] = v
+	}
+	thisConfig.Groups = groups
+	thisConfig.Shards = ChangeArray2FixedArray(sc.Hash.GetAssignArray())
+	sc.configs = append(sc.configs, thisConfig)
+
+	sc.output[index] = &StateMachineOutput{OK, thisConfig}
+	Debug(dMachine, "S%d 执行join命令,添加%+v", sc.me, thisConfig)
 }
 
 func (sc *ShardCtrler) leave(index int, cmd Command) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
+	Debug(dMachine, "S%d 执行move命令,index=%d,cmd=%+v", sc.me, index, cmd)
+	//重复，不用设置值，output中是nil
+	if sc.checkDuplicate(index, cmd) {
+		return
+	}
+
+	latestConfig := sc.latestConfig()
+	thisConfig := Config{Num: len(sc.configs)}
+	groups := CopyMap(latestConfig.Groups)
+
+	for _, v := range cmd.Op.GIDs {
+		if _, ok := latestConfig.Groups[v]; ok {
+			sc.Hash.RemoveGroup(v)
+			delete(groups, v)
+		}
+	}
+
+	thisConfig.Groups = groups
+	thisConfig.Shards = ChangeArray2FixedArray(sc.Hash.GetAssignArray())
+	sc.configs = append(sc.configs, thisConfig)
+
+	sc.output[index] = &StateMachineOutput{OK, thisConfig}
+
+	Debug(dMachine, "S%d 执行join命令,添加%+v", sc.me, thisConfig)
 }
 
 func (sc *ShardCtrler) register(index int, cmd Command) {

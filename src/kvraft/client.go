@@ -2,14 +2,11 @@ package kvraft
 
 import (
 	"6.824/labrpc"
-	"6.824/raft"
-	"sync"
 	"time"
 )
 import "crypto/rand"
 import "math/big"
 
-//todo 并发保护
 const (
 	REGISTER  string = "KVServer.ClientRegister"
 	GET       string = "KVServer.ClientQuery"
@@ -20,7 +17,6 @@ const NoLeaderSleepTime = time.Duration(50) * time.Millisecond
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
-	mu          sync.Locker //保证初始化，毕竟是阻塞客户端。。其他操作都是阻塞的
 	leaderIndex int
 	clientId    int
 	sequenceId  int
@@ -42,7 +38,6 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.clientId = -1
 	ck.sequenceId = 0
 	ck.leaderIndex = -1 //这个id是相对于这个数组的索引
-	ck.mu = raft.NewReentrantLock()
 	ck.n = len(ck.servers)
 	ck.nowIndex = -1
 	ck.fuckerId = nrand() % 5
