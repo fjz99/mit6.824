@@ -3,7 +3,9 @@ package shardctrler
 import (
 	"6.824/raft"
 	"fmt"
+	"hash/crc32"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"sync"
@@ -126,4 +128,26 @@ func (sc *ShardCtrler) checkDuplicate(CommandIndex int, command Command) bool {
 
 func (sc *ShardCtrler) reBalance() {
 
+}
+
+func HashString(key string) uint32 {
+	return crc32.ChecksumIEEE([]byte(key))
+}
+
+func FindShard(key string) int {
+	return int(crc32.ChecksumIEEE([]byte(key)) % NShards) //先取模，避免成为负数
+}
+
+// Returns an int >= min, < max
+func randomInt(min, max int) int {
+	return min + rand.Intn(max-min)
+}
+
+// Generate a random string of A-Z chars with len = l
+func randomString(len int) string {
+	bytes := make([]byte, len)
+	for i := 0; i < len; i++ {
+		bytes[i] = byte(randomInt(65, 90))
+	}
+	return string(bytes)
 }
