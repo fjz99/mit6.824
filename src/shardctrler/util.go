@@ -174,3 +174,18 @@ func ChangeArray2FixedArray(src []int) [NShards]int {
 	}
 	return arr
 }
+
+func DeleteArrayIndex(src []int, index int) []int {
+	return append(src[:index], src[(index+1):]...)
+}
+
+func DeleteArrayValue(src []int, target int) []int {
+	//删除第一个
+	i := 0
+	for i = 0; i < len(src); i++ {
+		if src[i] == target {
+			break
+		}
+	}
+	return DeleteArrayIndex(src, i)
+}

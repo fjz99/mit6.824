@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const DefaultReplicas = 50 //每个group的节点个数
-const IdStringLength = 18  //随机key的长度
 type SortKeys []uint32
 
 func (sk SortKeys) Len() int {
@@ -33,7 +31,7 @@ type Hash struct {
 	fixedArray    []int //表示规定某个shard为某个GID
 }
 
-func MakeHashRing(shardNum int) *Hash {
+func MakeHashRing(shardNum int) LoadBalancer {
 	hash := Hash{}
 	hash.ShardNum = shardNum
 	hash.SortKeys = SortKeys{}
@@ -131,7 +129,7 @@ func (hs *Hash) RemoveGroup(GID int) []int {
 	return hs.GetAssignArray()
 }
 
-func (hs *Hash) Assign(GID int, shardId int) []int {
+func (hs *Hash) Move(GID int, shardId int) []int {
 	hs.fixedArray[shardId] = GID
 	return hs.GetAssignArray()
 }

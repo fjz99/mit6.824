@@ -50,9 +50,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.configs = make([]Config, 1)
 	sc.configs[0].Groups = map[int][]string{}
 	sc.configs[0].Num = 0
-	for i := 0; i < NShards; i++ {
-		sc.configs[0].Shards[i] = -1 //每个分片分配给哪个group
-	}
+	//for i := 0; i < NShards; i++ {
+	//	sc.configs[0].Shards[i] = -1 //每个分片分配给哪个group
+	//}
 
 	labgob.Register(Op{})
 	labgob.Register(Command{})
@@ -67,7 +67,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sc.output = make(map[int]*StateMachineOutput)
 	sc.sessionSeed = 0
 	sc.session = map[int]int{}
-	sc.Hash = MakeHashRing(NShards)
+	sc.LoadBalancer = MakeSimpleLoadBalancer(NShards)
 
 	go sc.applier()
 
@@ -154,7 +154,7 @@ func (sc *ShardCtrler) move(index int, cmd Command) {
 		Debug(dMachine, "S%d 执行move命令,index=%d,cmd=%+v,GID不存在", sc.me, index, cmd)
 		return
 	}
-	assign := sc.Hash.Assign(op.GID, op.Shard)
+	assign := sc.LoadBalancer.Move(op.GID, op.Shard)
 	thisConfig := Config{Num: len(sc.configs)}
 	groups := CopyMap(latestConfig.Groups)
 
@@ -182,11 +182,11 @@ func (sc *ShardCtrler) join(index int, cmd Command) {
 	groups := CopyMap(latestConfig.Groups)
 
 	for k, v := range cmd.Op.Servers {
-		sc.Hash.AddGroup(k)
+		sc.LoadBalancer.AddGroup(k)
 		groups[k] = v
 	}
 	thisConfig.Groups = groups
-	thisConfig.Shards = ChangeArray2FixedArray(sc.Hash.GetAssignArray())
+	thisConfig.Shards = ChangeArray2FixedArray(sc.LoadBalancer.GetAssignArray())
 	sc.configs = append(sc.configs, thisConfig)
 
 	sc.output[index] = &StateMachineOutput{OK, thisConfig}
@@ -209,13 +209,13 @@ func (sc *ShardCtrler) leave(index int, cmd Command) {
 
 	for _, v := range cmd.Op.GIDs {
 		if _, ok := latestConfig.Groups[v]; ok {
-			sc.Hash.RemoveGroup(v)
+			sc.LoadBalancer.RemoveGroup(v)
 			delete(groups, v)
 		}
 	}
 
 	thisConfig.Groups = groups
-	thisConfig.Shards = ChangeArray2FixedArray(sc.Hash.GetAssignArray())
+	thisConfig.Shards = ChangeArray2FixedArray(sc.LoadBalancer.GetAssignArray())
 	sc.configs = append(sc.configs, thisConfig)
 
 	sc.output[index] = &StateMachineOutput{OK, thisConfig}

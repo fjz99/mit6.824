@@ -117,7 +117,7 @@ type ShardCtrler struct {
 	output      map[int]*StateMachineOutput //对应index的输出；不需要快照，只要重新执行命令即可
 	dead        int32
 
-	Hash *Hash
+	LoadBalancer LoadBalancer
 }
 
 type StateMachineOutput struct {
