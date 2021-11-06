@@ -80,7 +80,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 		output := sc.waitFor(index)
 		Debug(dServer, "S%d Query output = %+v", sc.me, output)
 		if output.Err == ErrWrongLeader {
-			*reply = QueryReply{true, ErrWrongLeader, output.Data.(Config)}
+			*reply = QueryReply{true, ErrWrongLeader, Config{}}
 		} else {
 			*reply = QueryReply{false, OK, output.Data.(Config)}
 		}

@@ -10,8 +10,6 @@ import "6.824/labrpc"
 import "sync"
 import "6.824/labgob"
 
-//todo 改造为非hash方法
-
 // Kill
 // the tester calls Kill() when a ShardCtrler instance won't
 // be needed again. you are not required to do anything
@@ -129,7 +127,8 @@ func (sc *ShardCtrler) query(index int, cmd Command) {
 	if cmd.Op.Num == -1 {
 		sc.output[index] = &StateMachineOutput{OK, *sc.latestConfig()}
 	} else if cmd.Op.Num >= len(sc.configs) {
-		return
+		//还没这个配置呢,引导客户端重试"配置num太大了！，还没加载！"
+		sc.output[index] = &StateMachineOutput{OK, Config{-1, [NShards]int{}, nil}}
 	} else {
 		sc.output[index] = &StateMachineOutput{OK, sc.configs[cmd.Op.Num]}
 	}

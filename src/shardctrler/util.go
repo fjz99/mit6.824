@@ -14,7 +14,7 @@ import (
 
 type logTopic string
 
-const DebugEnabled = true
+const DebugEnabled = false
 
 const (
 	dClient  logTopic = "CLNT"
@@ -117,7 +117,7 @@ func (sc *ShardCtrler) checkDuplicate(CommandIndex int, command Command) bool {
 			sc.output[CommandIndex] = &StateMachineOutput{OK, ""}
 			return true
 		} else {
-			s = command.SequenceId
+			sc.session[command.ClientId] = command.SequenceId
 			return false
 		}
 	} else {

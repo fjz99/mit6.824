@@ -68,6 +68,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 
 	args := &JoinArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.Servers = servers
+	ck.sequenceId++
 
 	for {
 		// try each known server.
@@ -89,6 +90,7 @@ func (ck *Clerk) Leave(gids []int) {
 
 	args := &LeaveArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.GIDs = gids
+	ck.sequenceId++
 
 	for {
 		// try each known server.
@@ -111,6 +113,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 	args := &MoveArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.Shard = shard
 	args.GID = gid
+	ck.sequenceId++
 
 	for {
 		// try each known server.
