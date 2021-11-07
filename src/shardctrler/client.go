@@ -8,11 +8,13 @@ import (
 	"6.824/labrpc"
 	"crypto/rand"
 	"math/big"
+	"sync"
 )
 import "time"
 
 type Clerk struct {
 	servers     []*labrpc.ClientEnd
+	mu          sync.Mutex
 	leaderIndex int
 	clientId    int
 	sequenceId  int
@@ -42,9 +44,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 }
 
 func (ck *Clerk) Query(num int) Config {
+	ck.mu.Lock()
 	if ck.clientId == -1 {
 		ck.InitClient()
 	}
+	ck.mu.Unlock()
 
 	args := &QueryArgs{}
 	args.Num = num
@@ -62,9 +66,11 @@ func (ck *Clerk) Query(num int) Config {
 }
 
 func (ck *Clerk) Join(servers map[int][]string) {
+	ck.mu.Lock()
 	if ck.clientId == -1 {
 		ck.InitClient()
 	}
+	ck.mu.Unlock()
 
 	args := &JoinArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.Servers = servers
@@ -84,9 +90,11 @@ func (ck *Clerk) Join(servers map[int][]string) {
 }
 
 func (ck *Clerk) Leave(gids []int) {
+	ck.mu.Lock()
 	if ck.clientId == -1 {
 		ck.InitClient()
 	}
+	ck.mu.Unlock()
 
 	args := &LeaveArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.GIDs = gids
@@ -106,9 +114,11 @@ func (ck *Clerk) Leave(gids []int) {
 }
 
 func (ck *Clerk) Move(shard int, gid int) {
+	ck.mu.Lock()
 	if ck.clientId == -1 {
 		ck.InitClient()
 	}
+	ck.mu.Unlock()
 
 	args := &MoveArgs{ClientId: ck.clientId, SeqId: ck.sequenceId}
 	args.Shard = shard

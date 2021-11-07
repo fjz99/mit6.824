@@ -21,7 +21,7 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
-	ErrVersion     = "ErrVersion"
+	ErrRedirect    = "ErrRedirect"
 )
 
 type Err string
@@ -50,14 +50,12 @@ type GetReply struct {
 
 type ReceiveShardArgs struct {
 	Shard      Shard
-	Version    int   //逻辑时钟
 	ClientId   int64 //会话id
 	SequenceId int
 }
 
 type ReceiveShardReply struct {
-	Err     Err
-	Version int
+	Err Err
 }
 
 type StateMachineOutput struct {
@@ -93,10 +91,10 @@ const (
 type OpType string
 
 type Shard struct {
-	Id      int
-	State   map[string]string
-	Session map[int64]int //会话；也要快照
-	//LastModifyVersion int
+	Id                int
+	State             map[string]string
+	Session           map[int64]int //会话；也要快照
+	LastModifyVersion int           //!!!
 }
 
 type ShardKV struct {
@@ -118,10 +116,11 @@ type ShardKV struct {
 	persister   *raft.Persister
 
 	//分片相关
-	ShardMap          map[int]Shard      //snap
-	Config            shardctrler.Config //snap
-	ResponsibleShards []int              //snap
-	Version           int                //当前的版本号,snap
+	ShardMap          map[int]Shard              //snap
+	Config            shardctrler.Config         //snap
+	QueryCache        map[int]shardctrler.Config //查询缓存
+	ResponsibleShards []int                      //snap
+	Version           int                        //当前的版本号,snap
 	mck               *shardctrler.Clerk
 
 	//分片转移
@@ -130,7 +129,6 @@ type ShardKV struct {
 }
 
 type Task struct {
-	Shard   *Shard
-	Version int //任务提交的时候的版本号
-	Target  int //发给谁
+	Shard  *Shard
+	Target int //发给谁
 }

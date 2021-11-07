@@ -242,10 +242,11 @@ func TestMissChange(t *testing.T) {
 	cfg.ShutdownServer(0, 0)
 	cfg.ShutdownServer(1, 0)
 	cfg.ShutdownServer(2, 0)
-
+	fmt.Println("fucker!0")
 	cfg.join(2)
 	cfg.leave(1)
 	cfg.leave(0)
+	fmt.Println("fucker!1")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -255,7 +256,7 @@ func TestMissChange(t *testing.T) {
 	}
 
 	cfg.join(1)
-
+	fmt.Println("fucker!2")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -266,7 +267,7 @@ func TestMissChange(t *testing.T) {
 	cfg.StartServer(0, 0)
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
-
+	fmt.Println("fucker!3")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
