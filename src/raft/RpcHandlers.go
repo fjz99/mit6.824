@@ -263,8 +263,16 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	//发送快照到apply chan
 	go func() {
-		rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: rf.snapshot,
-			SnapshotIndex: rf.snapshotMachineIndex, SnapshotTerm: rf.snapshotTerm}
+		//make内部得用新的线程
+		rf.mu.Lock() //防止死锁，因为是同步队列
+		b := make([]byte, len(rf.snapshot))
+		copy(b, rf.snapshot)
+		i := rf.snapshotMachineIndex
+		t := rf.snapshotTerm
+		rf.mu.Unlock()
+
+		rf.applyCh <- ApplyMsg{CommandValid: false, SnapshotValid: true, Snapshot: b,
+			SnapshotIndex: i, SnapshotTerm: t}
 	}()
 	Debug(dSnap, "follower接收到S%d的快照，更新完成！", rf.me, args.LeaderId)
 }

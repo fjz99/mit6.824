@@ -5,6 +5,7 @@ import (
 	"6.824/raft"
 	"6.824/shardctrler"
 	"bytes"
+	"fmt"
 	"time"
 )
 
@@ -113,11 +114,12 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 //修改配置
 func (kv *ShardKV) changeConfigUtil(newConfig shardctrler.Config) {
 	Debug(dTrace, "G%d-S%d changeConfigUtil new:%+v,my:%+v", kv.gid, kv.me, newConfig, kv.Config)
-	if newConfig.Num == kv.Version {
+	if newConfig.Num <= kv.Version {
+		//调用gotLatestConfig的方法很多，所以很容易出现并发问题，即newConfig的版本比当前的版本小等。。
 		Debug(dServer, "G%d-S%d changeConfigUtil version等同，为%d，abort", kv.gid, kv.me, newConfig.Num)
 		return
 	}
-	Assert(newConfig.Num > kv.Version, "")
+	//Assert(newConfig.Num > kv.Version, "")
 	//checkAlwaysMe := kv.checkAlwaysMe(kv.Version, newConfig.Num) //获得改变的map
 	lastConfig := kv.Config
 	kv.setNewConfig(newConfig)
@@ -219,7 +221,7 @@ func (kv *ShardKV) sendShards2Channel() {
 //等待分片准备好，返回false代表分片不归我管了或者我不是leader了，true为已经准备好
 func (kv *ShardKV) waitUntilReady(shard int) bool {
 	for !kv.killed() {
-		//kv.getLatestConfig(false) //拉取最新的并且等待
+		kv.getLatestConfig() //拉取最新的并且等待
 
 		kv.mu.Lock()
 		isReady, ok := kv.Ready[shard]
@@ -302,17 +304,23 @@ func (kv *ShardKV) shardSenderThread() {
 func (kv *ShardKV) sendShardTo(task *Task) int {
 	Debug(dTrace, "G%d-S%d sendShardTo：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
 	kv.mu.Lock()
-	targetServers := make([]string, len(kv.Config.Groups[task.Target]))
-	copy(targetServers, kv.Config.Groups[task.Target])
+	c := kv.QueryOrCached(task.Shard.LastModifyVersion + 1)
+	target := c.Shards[task.Shard.Id]
+	Assert(target == task.Target, "")
+	targetServers := make([]string, len(c.Groups[task.Target]))
+	copy(targetServers, c.Groups[task.Target])
+	//for len(targetServers) fixme
 	kv.mu.Unlock()
 	index := 0
 	Debug(dTrace, "G%d-S%d sendShardTo：targetServers=%+v", kv.gid, kv.me, targetServers)
+	//fixme 拒绝发送，因为会有后面的人负责发送的
 	if len(targetServers) == 0 {
-		kv.mu.Lock()
-		kv.ShardMap[task.Shard.Id] = Shard{task.Shard.Id, task.Shard.State, task.Shard.Session,
-			task.Shard.LastModifyVersion + 1}
-		kv.mu.Unlock()
+		//kv.mu.Lock()
+		//kv.ShardMap[task.Shard.Id] = Shard{task.Shard.Id, task.Shard.State, task.Shard.Session,
+		//	task.Shard.LastModifyVersion + 1}
+		//kv.mu.Unlock()
 		Debug(dTrace, "G%d-S%d sendShardTo：target group=%d 已经被移除,所以自增LastModifyVersion", kv.gid, kv.me, task.Target)
+		panic(1)
 		return 4
 	}
 
@@ -326,7 +334,7 @@ func (kv *ShardKV) sendShardTo(task *Task) int {
 		kv.mu.Unlock()
 
 		ok := end.Call("ShardKV.ReceiveShard", args, reply)
-		Debug(dTrace, "G%d-S%d fuck! sendShardTo：ok=%v,end=%v;%v", kv.gid, kv.me, ok, end, targetServers[index])
+		//Debug(dTrace, "G%d-S%d fuck! sendShardTo：ok=%v,end=%v;%v", kv.gid, kv.me, ok, end, targetServers[index])
 
 		//reply是安全的，不用加锁
 		if ok {
@@ -366,12 +374,12 @@ func (kv *ShardKV) sendShardTo(task *Task) int {
 func (kv *ShardKV) getConfigFor(version int) {
 	Debug(dServer, "G%d-S%d 调用 getConfigFor version=%d", kv.gid, kv.me, version)
 
-	query := kv.QueryOrCached(version) //这里不要锁定！
-
 	kv.mu.Lock()
 	isLeader := kv.isLeader()
 	thisVersion := kv.Version
 	kv.mu.Unlock() //fixme
+
+	query := kv.QueryOrCached(version) //这里不要锁定！
 
 	if !isLeader {
 		Debug(dServer, "G%d-S%d 我不是leader,不拉取配置，abort", kv.gid, kv.me)
@@ -388,7 +396,7 @@ func (kv *ShardKV) getConfigFor(version int) {
 		return
 	}
 
-	Assert(query.Num >= thisVersion, "")
+	Assert(query.Num >= thisVersion, fmt.Sprintf("query:%+v,my version=%d", query, thisVersion))
 	if query.Num == thisVersion {
 		//直接添加任务
 		//if sendShardIfVersionEquals {
@@ -426,7 +434,7 @@ func (kv *ShardKV) getConfigFor(version int) {
 		//kv.mu.Unlock()
 
 		thisConfig := kv.QueryOrCached(query.Num)
-		kv.mu.Lock()
+		kv.mu.Lock()                    //调用gotLatestConfig的方法很多，所以很容易出现并发问题
 		kv.changeConfigUtil(thisConfig) //负责list也会修改
 		//kv.sendShards2Channel()
 		Debug(dServer, "G%d-S%d 拉取配置结束,最终修改为%+v", kv.gid, kv.me, kv.Config)

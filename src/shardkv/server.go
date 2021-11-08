@@ -11,6 +11,8 @@ package shardkv
 //todo 历史版本不持久化
 //todo 发送时不会清空发送队列
 //todo 要保证版本一下一下变，接收方接收到之后，检查last版本，然后获得他的下一个版本，如果就是我那就行，否则就转发这样增加last号
+//todo condInstallSnapshot 有bug
+
 import (
 	"6.824/labrpc"
 	"6.824/shardctrler"
@@ -30,7 +32,15 @@ func (kv *ShardKV) applier() {
 		if op.SnapshotValid {
 			Assert(!op.CommandValid, "")
 			//读取快照
-			if kv.rf.CondInstallSnapshot(op.SnapshotTerm, op.SnapshotIndex, op.Snapshot) {
+			//if kv.rf.CondInstallSnapshot(op.SnapshotTerm, op.SnapshotIndex, op.Snapshot) {
+			//	Debug(dServer, "G%d-S%d 装载快照,快照index=%d，我的lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
+			//	kv.readSnapshotPersist(op.Snapshot)
+			//	kv.lastApplied = op.SnapshotIndex
+			//} else {
+			//	Debug(dServer, "G%d-S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
+			//}
+			//直接判断即可，不用他的接口
+			if kv.lastApplied < op.SnapshotIndex {
 				Debug(dServer, "G%d-S%d 装载快照,快照index=%d，我的lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
 				kv.readSnapshotPersist(op.Snapshot)
 				kv.lastApplied = op.SnapshotIndex
@@ -96,6 +106,7 @@ func (kv *ShardKV) changeConfig(CommandIndex int, command Command) {
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig失败，操作数的config比我的小"}
 		return
 	} else if !kv.checkDuplicate(CommandIndex, command) {
+		//只有在状态机执行状态转换的时候，才会发送shard，否则可能出现发送脏数据的问题 fixme
 		kv.changeConfigUtil(*command.Op.Config)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig成功！"}
 	}
@@ -108,7 +119,7 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 	_, exists := kv.ShardMap[shardId]
 
 	Debug(dMachine, "G%d-S%d 执行receiveShard命令,index=%d,shard=%+v", kv.gid, kv.me, CommandIndex, *command.Op.Shard)
-
+	kv.getLatestConfig() //fixme
 	//必须检验，很可能多次接收
 	if kv.checkDuplicate(CommandIndex, command) {
 		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复receive！", kv.gid, kv.me, shardId)
@@ -130,7 +141,7 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 		}
 		return
 	}
-	Assert(shard.LastModifyVersion < kv.Version, "")
+	//Assert(shard.LastModifyVersion < kv.Version, "") //因为异步了，所以可能比我大
 	if shard.LastModifyVersion == kv.Version-1 {
 		//下一个就是我，ok
 		if exists {
@@ -317,7 +328,7 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 	state := kv.ShardMap[shard].State
 	if !kv.checkDuplicate(CommandIndex, command) {
 		if v, ok := state[command.Op.Key]; ok {
-			Debug(dMachine, "G%d-S%d 执行append命令,value=%s", kv.gid, kv.me, v)
+			Debug(dMachine, "G%d-S%d 执行append命令前,value=%s", kv.gid, kv.me, v)
 			state[command.Op.Key] = v + command.Op.Value
 			kv.output[CommandIndex] = &StateMachineOutput{OK, state[command.Op.Key]}
 		} else {
@@ -326,6 +337,7 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 			kv.output[CommandIndex] = &StateMachineOutput{OK, state[command.Op.Key]}
 		}
 	}
+	Debug(dMachine, "G%d-S%d 执行append命令结束,value=%s", kv.gid, kv.me, state[command.Op.Key])
 
 }
 
@@ -337,10 +349,11 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 //
 func (kv *ShardKV) Kill() {
 	Debug(dServer, "G%d-S%d 被kill", kv.gid, kv.me)
+	kv.sendShards2Channel() //?
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	close(kv.migrationChan)
-	close(kv.applyCh)
+	//close(kv.migrationChan)
+	//close(kv.applyCh)
 	//Debug(dServer, "G%d-S%d 被kill结束", kv.gid, kv.me)
 }
 

@@ -4,13 +4,13 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.waitUtilInit()
 
 	kv.mu.Lock()
-	Debug(dServer, "G%d-S%d 接收到Get rpc,args=%+v", kv.gid, kv.me, *args)
+	Debug(dServer, "G%d-S%d 接收到Get rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	//kv.getLatestConfig() //也需要等待，因为可能遇到没到当前最新config的情况，导致用别的config判断waitUntilReady。。
 	kv.mu.Unlock()
 
 	shard := key2shard(args.Key)
 	ok := kv.waitUntilReady(shard) //因为会sleep
-	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d", kv.gid, kv.me, kv.Version)
+	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d,ready=%+v", kv.gid, kv.me, kv.Version, kv.Ready)
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -50,20 +50,23 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			panic(1)
 		}
 	}
-	Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
+	Debug(dServer, "G%d-S%d Get rpc,,对应分片为%d,返回 %+v", kv.gid, kv.me, key2shard(args.Key), *reply)
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.waitUtilInit()
 
 	kv.mu.Lock()
-	Debug(dServer, "G%d-S%d 接收到PutAppend rpc,args=%+v", kv.gid, kv.me, *args)
+	Debug(dServer, "G%d-S%d 接收到PutAppend rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	//kv.getLatestConfig()
 	kv.mu.Unlock()
 
 	shard := key2shard(args.Key)
 	ok := kv.waitUntilReady(shard)
-	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d", kv.gid, kv.me, kv.Version)
+
+	kv.mu.Lock()
+	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d,ready=%+v", kv.gid, kv.me, kv.Version, kv.Ready)
+	kv.mu.Unlock()
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -106,7 +109,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			panic(1)
 		}
 	}
-	Debug(dServer, "G%d-S%d PutAppend rpc,返回 %+v", kv.gid, kv.me, *reply)
+	Debug(dServer, "G%d-S%d PutAppend rpc,对应分片为%d,返回 %+v", kv.gid, kv.me, key2shard(args.Key), *reply)
 }
 
 func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply) {
@@ -115,12 +118,12 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 
 	Debug(dServer, "G%d-S%d 接收到ReceiveShard rpc,args=%+v", kv.gid, kv.me, *args)
 
-	//kv.getLatestConfig(false)
+	kv.getLatestConfig()
 	//不拉取也行，有自动拉取的，因为收到的shard有version，在状态机中进行处理
 
 	kv.mu.Lock()
 	isLeader := kv.isLeader()
-	version := kv.Version
+	//version := kv.Version
 	kv.mu.Unlock()
 
 	if !isLeader {
@@ -129,9 +132,9 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 		Debug(dServer, "G%d-S%d ReceiveShard rpc,返回 %+v", kv.gid, kv.me, *reply)
 		return
 	}
-	if version <= args.Shard.LastModifyVersion {
-		kv.getLatestConfig()
-	}
+	//if version <= args.Shard.LastModifyVersion {
+	//	kv.getLatestConfig()
+	//}
 	shard := args.Shard
 	nextConfig := kv.QueryOrCached(shard.LastModifyVersion + 1)
 	nextNextConfig := kv.QueryOrCached(shard.LastModifyVersion + 2)
