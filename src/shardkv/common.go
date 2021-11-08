@@ -127,6 +127,7 @@ type ShardKV struct {
 	//分片转移
 	migrationChan chan *Task
 	Ready         map[int]bool //指的是分片是否准备好了,snap
+	lastSentId    []int
 }
 
 func (kv *ShardKV) getMaxVersionOfShards() int {

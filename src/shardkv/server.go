@@ -168,32 +168,32 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 }
 
 func (kv *ShardKV) deleteShard(CommandIndex int, command Command) {
-	shard := command.Op.ShardId
+	shardId := command.Op.ShardId
 
-	Debug(dMachine, "G%d-S%d 执行deleteShard命令,index=%d,shard=%d", kv.gid, kv.me, CommandIndex, shard)
+	Debug(dMachine, "G%d-S%d 执行deleteShard命令,index=%d,shardId=%d,shard=%+v", kv.gid, kv.me, CommandIndex, shardId, command.Op.Shard)
 	//检验了也没啥用，因为是自己提交的，clientId=-1
 	if kv.checkDuplicate(CommandIndex, command) {
-		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shard=%d,重复delete！", kv.gid, kv.me, shard)
+		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复delete！", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "重复delete！"}
 		return
 	}
 
-	if kv.Config.Shards[shard] == kv.gid {
+	if kv.Config.Shards[shardId] == kv.gid && command.Op.Shard.LastModifyVersion == kv.Version {
 		//我不负责就对了，因为是先改变config再删除的。。
 		//即现在我负责的，不能删除，但是曾经我负责的，可以删除
-		Debug(dMachine, "G%d-S%d 执行deleteShard命令，shard=%d,这个shard我负责！！！", kv.gid, kv.me, shard)
+		Debug(dMachine, "G%d-S%d 执行deleteShard命令，shardId=%d,这个shard我负责,而且last version=my version，不能删除，abort", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "我负责！，不能删除！"}
 		return
 	}
 
-	if _, ok := kv.ShardMap[shard]; !ok {
+	if _, ok := kv.ShardMap[shardId]; !ok {
 		//可能会发生重复删除
-		Debug(dMachine, "G%d-S%d WARN：执行deleteShard命令，shard=%d,这个shard不存在！", kv.gid, kv.me, shard)
+		Debug(dMachine, "G%d-S%d WARN：执行deleteShard命令，shardId=%d,这个shard不存在！", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "不存在!"}
 		return
 	}
 
-	delete(kv.ShardMap, shard)
+	delete(kv.ShardMap, shardId)
 
 	Debug(dMachine, "G%d-S%d 执行deleteShard命令,ok", kv.gid, kv.me)
 	kv.output[CommandIndex] = &StateMachineOutput{OK, "delete!"}
@@ -346,6 +346,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.Version = -1
 	kv.Ready = map[int]bool{}
 	kv.QueryCache = map[int]shardctrler.Config{}
+	kv.lastSentId = make([]int, NShards)
+	raft.SetArrayValue(kv.lastSentId, -1)
 	//启动时创建自己负责的
 	//fixme 如果是迁移失败，重启之后呢？
 

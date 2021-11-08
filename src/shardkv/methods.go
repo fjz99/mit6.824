@@ -73,9 +73,10 @@ func (kv *ShardKV) constructSnapshot() []byte {
 	encoder.Encode(kv.Version)
 	encoder.Encode(kv.ResponsibleShards)
 	encoder.Encode(kv.Ready)
+	encoder.Encode(kv.lastSentId)
 
-	Debug(dServer, "G%d-S%d 创建快照完成，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v",
-		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready)
+	Debug(dServer, "G%d-S%d 创建快照完成，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v,lastSentId=%+v",
+		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready, kv.lastSentId)
 	return buf.Bytes()
 }
 
@@ -93,12 +94,14 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 	var version int
 	var res []int
 	var ready map[int]bool
+	var ls []int
 
 	if d.Decode(&ShardMap) != nil ||
 		d.Decode(&con) != nil ||
 		d.Decode(&version) != nil ||
 		d.Decode(&res) != nil ||
-		d.Decode(&ready) != nil {
+		d.Decode(&ready) != nil ||
+		d.Decode(&ls) != nil {
 		panic("decode err")
 	} else {
 		kv.ShardMap = ShardMap
@@ -106,9 +109,10 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 		kv.Version = version
 		kv.ResponsibleShards = res
 		kv.Ready = ready
+		kv.lastSentId = ls
 	}
-	Debug(dServer, "G%d-S%d 读取snapshot持久化数据成功，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v",
-		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready)
+	Debug(dServer, "G%d-S%d 读取snapshot持久化数据成功，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v,lastSentId=%+v",
+		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready, kv.lastSentId)
 }
 
 //修改配置
@@ -281,6 +285,14 @@ func (kv *ShardKV) shardSenderThread() {
 	for task := range kv.migrationChan {
 		kv.mu.Lock()
 		Debug(dServer, "G%d-S%d 开始发送task：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
+		//记录lastSent
+		if kv.lastSentId[task.Shard.Id] >= task.Shard.LastModifyVersion {
+			Debug(dServer, "G%d-S%d lastSent大于发送的version，放弃发送task：%+v，shard=%+v,lastSent=%+v", kv.gid, kv.me, *task, *task.Shard, kv.lastSentId)
+			kv.mu.Unlock()
+			continue
+		} else {
+			kv.lastSentId[task.Shard.Id] = task.Shard.LastModifyVersion
+		}
 	tryAgain:
 		if !kv.isLeader() {
 			Debug(dServer, "G%d-S%d 我不是leader，放弃发送task：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
@@ -318,17 +330,18 @@ func (kv *ShardKV) shardSenderThread() {
 //细粒度的锁，也会导致互斥性比较弱，导致方法内状态改变
 func (kv *ShardKV) sendShardTo(task *Task) int {
 	Debug(dTrace, "G%d-S%d sendShardTo：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-	kv.mu.Lock()
-	if _, ok := kv.ShardMap[task.Shard.Id]; !ok {
-		Debug(dTrace, "G%d-S%d sendShardTo：%+v，shard=%+v,shard被删除，取消发送", kv.gid, kv.me, *task, *task.Shard)
-		kv.mu.Unlock()
-		return 2
-	}
 
-	if kv.MachineVersion == task.Shard.LastModifyVersion {
+	for {
+		kv.mu.Lock()
+		v := kv.MachineVersion == task.Shard.LastModifyVersion
 		kv.mu.Unlock()
-		return 2
+		if !v {
+			break
+		}
+		Debug(dTrace, "G%d-S%d sendShardTo：kv.MachineVersion == task.Shard.LastModifyVersion，sleep 50ms", kv.gid, kv.me)
+		time.Sleep(time.Duration(50) * time.Millisecond)
 	}
+	kv.mu.Lock()
 	c := kv.QueryOrCached(task.Shard.LastModifyVersion + 1) //直接找下一跳
 	target := c.Shards[task.Shard.Id]
 	Assert(target == task.Target, "")
