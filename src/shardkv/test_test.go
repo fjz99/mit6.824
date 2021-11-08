@@ -340,10 +340,13 @@ func TestConcurrent1(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
+	fmt.Println("join1")
 	cfg.join(1)
 	time.Sleep(500 * time.Millisecond)
+	fmt.Println("join2")
 	cfg.join(2)
 	time.Sleep(500 * time.Millisecond)
+	fmt.Println("leave0")
 	cfg.leave(0)
 
 	cfg.ShutdownGroup(0)
@@ -351,7 +354,7 @@ func TestConcurrent1(t *testing.T) {
 	cfg.ShutdownGroup(1)
 	time.Sleep(100 * time.Millisecond)
 	cfg.ShutdownGroup(2)
-
+	fmt.Println("leave2")
 	cfg.leave(2)
 
 	time.Sleep(100 * time.Millisecond)
@@ -360,18 +363,21 @@ func TestConcurrent1(t *testing.T) {
 	cfg.StartGroup(2)
 
 	time.Sleep(100 * time.Millisecond)
+	fmt.Println("join0")
 	cfg.join(0)
+	fmt.Println("leave1")
 	cfg.leave(1)
 	time.Sleep(500 * time.Millisecond)
+	fmt.Println("join1")
 	cfg.join(1)
 
 	time.Sleep(1 * time.Second)
-
+	fmt.Println("wait!")
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch
 	}
-
+	fmt.Println("wait! done")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}

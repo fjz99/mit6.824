@@ -121,11 +121,22 @@ type ShardKV struct {
 	QueryCache        map[int]shardctrler.Config //查询缓存
 	ResponsibleShards []int                      //snap
 	Version           int                        //当前的版本号,snap
+	MachineVersion    int                        //状态机执行到的版本号
 	mck               *shardctrler.Clerk
 
 	//分片转移
 	migrationChan chan *Task
 	Ready         map[int]bool //指的是分片是否准备好了,snap
+}
+
+func (kv *ShardKV) getMaxVersionOfShards() int {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	m := -1
+	for _, v := range kv.ShardMap {
+		m = raft.Max(m, v.LastModifyVersion)
+	}
+	return m
 }
 
 type Task struct {
