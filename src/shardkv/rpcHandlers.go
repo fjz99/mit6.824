@@ -1,5 +1,7 @@
 package shardkv
 
+import "fmt"
+
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.waitUtilInit()
 
@@ -30,7 +32,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		isLeader := kv.isLeader()
 		isRespons := kv.verifyShardResponsibility(shard)
 		_, has := kv.ShardMap[shard]
-		Assert(ok && isReady && isLeader && isRespons && has, "")
+		Assert(ok && isReady && isLeader && isRespons && has, fmt.Sprintf("%v,%v,%v,%v,%v", ok, isReady, isLeader, isRespons, has))
 	}
 
 	op := &Op{GetType, args.Key, "", nil, -1, nil}

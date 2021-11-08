@@ -44,6 +44,8 @@ func (kv *ShardKV) checkDuplicate(CommandIndex int, command Command) bool {
 	}
 	shard := key2shard(command.Op.Key)
 	session := kv.ShardMap[shard].Session
+	Debug(dTrace, "G%d-S%d checkDuplicate shard=%v,shardMap=%+v", kv.gid, kv.me, shard, kv.ShardMap)
+	Assert(session != nil, "")
 	if s, ok := session[command.ClientId]; ok {
 		if s >= command.SequenceId {
 			//不执行,因为只有put，所以也不用返回。。
@@ -239,19 +241,20 @@ func (kv *ShardKV) sendShards2Channel() {
 //等待分片准备好，返回false代表分片不归我管了或者我不是leader了，true为已经准备好
 func (kv *ShardKV) waitUntilReady(shard int) bool {
 	for !kv.killed() {
-		//kv.getLatestConfig() //拉取最新的并且等待
+		kv.getLatestConfig() //拉取最新的并且等待
 
 		kv.mu.Lock()
 		isReady, ok := kv.Ready[shard]
 		isLeader := kv.isLeader()
 		isRespons := kv.verifyShardResponsibility(shard)
-
+		v, exists := kv.ShardMap[shard]
+		ver := kv.Version
 		kv.mu.Unlock()
 
 		if !ok || !isLeader || !isRespons {
 			return false
 		}
-		if isReady {
+		if isReady && exists && v.LastModifyVersion == ver {
 			return true
 		}
 		time.Sleep(time.Duration(100) * time.Millisecond)
@@ -684,4 +687,18 @@ func (kv *ShardKV) submitNewReceiveLog(shard Shard) (int, bool) {
 	index, _, isLeader := kv.rf.Start(cmd)
 
 	return index, isLeader
+}
+
+func (kv *ShardKV) isReady(shard int) bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	r := true
+
+	isReady, ok := kv.Ready[shard]
+	isLeader := kv.isLeader()
+	v, exists := kv.ShardMap[shard]
+
+	r = r && ok && isReady && isLeader && exists
+	return r && v.LastModifyVersion == kv.Version
 }
