@@ -210,8 +210,10 @@ func (kv *ShardKV) put(CommandIndex int, command Command) {
 	shard := key2shard(command.Op.Key)
 
 	if !kv.isReady(shard) {
-		Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
-		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
+		if kv.isLeader() {
+			Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
+			kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
+		}
 		return
 	}
 
@@ -257,8 +259,10 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 	//判断这个key存不存在，因为waitUntilReady之后，异步可能改变map，delete了
 	shard := key2shard(command.Op.Key)
 	if !kv.isReady(shard) {
-		Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
-		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
+		if kv.isLeader() {
+			Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
+			kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
+		}
 		return
 	}
 

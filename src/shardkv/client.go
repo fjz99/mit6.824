@@ -118,6 +118,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				Debug(dClient, "C%d 调用put append，返回", ck.clientId, reply)
 				if ok && reply.Err == OK {
 					Debug(dClient, "C%d 调用put append，ok", ck.clientId)
 					return
@@ -126,7 +127,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 					Debug(dClient, "C%d 调用put append，key=%s,group WRONG", ck.clientId, key)
 					break
 				}
-				// ... not ok, or ErrWrongLeader
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
