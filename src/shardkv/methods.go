@@ -5,6 +5,7 @@ import (
 	"6.824/raft"
 	"6.824/shardctrler"
 	"bytes"
+	"fmt"
 	"time"
 )
 
@@ -128,23 +129,29 @@ func (kv *ShardKV) setNewConfig(newConfig shardctrler.Config) {
 
 //等待分片准备好，客户端的版本号应该大于等于我的
 func (kv *ShardKV) waitUntilReady(shard int, clientVersion int) bool {
-	kv.mu.Lock()
-	Assert(kv.Version <= clientVersion, "")
-	kv.mu.Unlock()
+	//kv.mu.Lock()
+	//Assert(kv.Version <= clientVersion, "")
+	//kv.mu.Unlock()
 
 	for !kv.killed() {
 
 		kv.mu.Lock()
 		isLeader := kv.isLeader()
-		isRespons := kv.verifyShardResponsibility(shard)
-		ver := kv.Version
-		status := kv.ShardStatus
+		//isRespons := kv.verifyShardResponsibility(shard)
+		//ver := kv.Version
+		status := kv.ShardStatus[shard]
 		kv.mu.Unlock()
 
-		if !isLeader || clientVersion < ver {
+		//if !isLeader || clientVersion < ver {
+		//	return false
+		//}
+		//if clientVersion == ver && status[shard] == READY {
+		//	return true
+		//}
+		if !isLeader {
 			return false
 		}
-		if clientVersion == ver && status[shard] == READY {
+		if status == READY {
 			return true
 		}
 		time.Sleep(time.Duration(100) * time.Millisecond)
@@ -181,18 +188,6 @@ func (kv *ShardKV) findWhoResponsibleForShard(shard int) int {
 	defer kv.mu.Unlock()
 
 	return kv.Config.Shards[shard]
-}
-
-func (kv *ShardKV) waitUtilInit() {
-	for !kv.killed() {
-		kv.mu.Lock()
-		v := kv.Version
-		kv.mu.Unlock()
-		if v >= 1 {
-			return
-		}
-		time.Sleep(time.Duration(100) * time.Millisecond)
-	}
 }
 
 func (kv *ShardKV) isLeader() bool {
@@ -312,16 +307,18 @@ func (kv *ShardKV) GCThread() {
 		kv.mu.Lock()
 		if !kv.isLeader() {
 			kv.mu.Unlock()
+			time.Sleep(GcInterval)
 			continue
 		}
-
+		Debug(dServer, "G%d-S%d GCThread,开始GC %+v", kv.gid, kv.me, kv.ShardStatus)
 		for i := 0; i < NShards; i++ {
 			if kv.ShardStatus[i] == GC {
 				if _, ok := kv.ShardMap[i]; ok {
 					kv.submitNewDeleteLog(i)
+					//kv.ShardStatus[i] = NotMine//?? fixme因为异步删除，所以可能多次submit
 					Debug(dServer, "G%d-S%d GCThread GC shard=%d", kv.gid, kv.me, i)
 				} else {
-					panic("GC ERR")
+					panic(fmt.Sprintf("GC ERR %+v %+v", kv.ShardMap, kv.ShardStatus))
 				}
 			}
 		}
@@ -344,9 +341,10 @@ func (kv *ShardKV) PullConfigThread() {
 		kv.mu.Unlock()
 
 		if !isLeader {
+			time.Sleep(FetchConfigInterval)
 			continue
 		}
-
+		Debug(dServer, "G%d-S%d PullConfigThread,开始pull version=%d,status=%+v", kv.gid, kv.me, kv.Version, kv.ShardStatus)
 		if !kv.canFetchConfig() {
 			Debug(dServer, "G%d-S%d PullConfigThread,config没迁移完，无法进行下一次拉取,status=%+v", kv.gid, kv.me, kv.ShardStatus)
 		} else {
@@ -360,8 +358,8 @@ func (kv *ShardKV) PullConfigThread() {
 				Debug(dServer, "G%d-S%d PullConfigThread,无下一个config，当前version=%d", kv.gid, kv.me, version)
 			}
 		}
-		Debug(dServer, "G%d-S%d PullConfigThread,done", kv.gid, kv.me)
-		kv.mu.Unlock()
+		Debug(dServer, "G%d-S%d PullConfigThread,done,status=%+v", kv.gid, kv.me, kv.ShardStatus)
+		//kv.mu.Unlock()
 		time.Sleep(FetchConfigInterval)
 	}
 
@@ -385,7 +383,7 @@ func (kv *ShardKV) SendShardThread() {
 				go kv.doSendShard(kv.ShardMap[i])
 			}
 		}
-		Debug(dServer, "G%d-S%d SendShardThread,done", kv.gid, kv.me)
+		Debug(dServer, "G%d-S%d SendShardThread,done,status=%+v", kv.gid, kv.me, kv.ShardStatus)
 		kv.mu.Unlock()
 		time.Sleep(SendShardInterval)
 	}
@@ -410,10 +408,17 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 			continue
 		}
 
+		kv.mu.Lock()
+		Debug(dServer, "G%d-S%d SendShardThread,doSendShard,status=%+v，reply=%+v", kv.gid, kv.me, kv.ShardStatus, reply)
+		kv.mu.Unlock()
+
 		if reply.Err == OK {
 			//迁移成功
 			kv.mu.Lock()
-			kv.ShardStatus[shard.Id] = GC
+			//可能重复发送，导致重复接收到ok
+			if kv.ShardStatus[shard.Id] == OUT {
+				kv.ShardStatus[shard.Id] = GC
+			}
 			kv.mu.Unlock()
 			return
 		} else if reply.Err == ErrWrongLeader {

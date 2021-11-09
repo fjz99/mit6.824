@@ -138,6 +138,5 @@ func CopyShard(src Shard) Shard {
 	s := Shard{Id: src.Id}
 	s.State = CopyMap(src.State)
 	s.Session = CopySessionMap(src.Session)
-	s.LastModifyVersion = src.LastModifyVersion
 	return s
 }

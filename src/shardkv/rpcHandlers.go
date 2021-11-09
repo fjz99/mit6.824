@@ -1,21 +1,15 @@
 package shardkv
 
-import "fmt"
-
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	kv.waitUtilInit()
 
-	kv.mu.Lock()
 	Debug(dServer, "G%d-S%d 接收到Get rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
-	kv.getLatestConfig() //也需要等待，因为可能遇到没到当前最新config的情况，导致用别的config判断waitUntilReady。。
-	kv.mu.Unlock()
-
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard) //因为会sleep
-	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d,ready=%+v", kv.gid, kv.me, kv.Version, kv.Ready)
+	ok := kv.waitUntilReady(shard, -1) //因为会sleep
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d,status=%+v", kv.gid, kv.me, kv.Version, kv.ShardStatus)
+
 	if !ok {
 		if !kv.isLeader() {
 			*reply = GetReply{ErrWrongLeader, ""}
@@ -28,14 +22,14 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			return
 		}
 	} else {
-		isReady, ok := kv.Ready[shard]
-		isLeader := kv.isLeader()
-		isRespons := kv.verifyShardResponsibility(shard)
-		_, has := kv.ShardMap[shard]
-		Assert(ok && isReady && isLeader && isRespons && has, fmt.Sprintf("%v,%v,%v,%v,%v", ok, isReady, isLeader, isRespons, has))
+		//isReady := kv.ShardStatus[shard]
+		//isLeader := kv.isLeader()
+		//isRespons := kv.verifyShardResponsibility(shard)
+		//_, has := kv.ShardMap[shard]
+		//Assert(ok && isReady && isLeader && isRespons && has, fmt.Sprintf("%v,%v,%v,%v,%v", ok, isReady, isLeader, isRespons, has))
 	}
 
-	op := &Op{GetType, args.Key, "", nil, -1, nil}
+	op := &Op{GetType, args.Key, "", nil, -1, nil, -1}
 	cmd := kv.buildCmd(op, -1, -1)
 	index, _, isLeader := kv.rf.Start(cmd)
 
@@ -48,7 +42,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		Debug(dServer, "G%d-S%d Get debug output = %+v", kv.gid, kv.me, output)
 		if output.Err == ErrWrongLeader {
 			*reply = GetReply{ErrWrongLeader, ""}
-		} else if !kv.verifyKeyResponsibility(args.Key) {
+		} else if output.Err == ErrWrongGroup {
 			*reply = GetReply{ErrWrongGroup, ""}
 		} else if output.Err == OK {
 			*reply = GetReply{OK, output.Data.(string)}
@@ -62,22 +56,14 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	kv.waitUtilInit()
-
-	kv.mu.Lock()
 	Debug(dServer, "G%d-S%d 接收到PutAppend rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
-	kv.getLatestConfig()
-	kv.mu.Unlock()
-
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard)
-
-	kv.mu.Lock()
-	Debug(dTrace, "G%d-S%d PutAppend rpc,args=%+v： waitUntilReady 结束，当前version为%d,ready=%+v", kv.gid, kv.me, *args, kv.Version, kv.Ready)
-	kv.mu.Unlock()
+	ok := kv.waitUntilReady(shard, -1)
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	Debug(dTrace, "G%d-S%d PutAppend rpc,args=%+v： waitUntilReady 结束，当前version为%d,status=%+v", kv.gid, kv.me, *args, kv.Version, kv.ShardStatus)
+
 	if !ok {
 		if !kv.isLeader() {
 			*reply = PutAppendReply{ErrWrongLeader}
@@ -90,11 +76,11 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			return
 		}
 	}
-	op := &Op{PutType, args.Key, args.Value, nil, -1, nil}
+	op := &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
 	if args.Op == "Put" {
-		op = &Op{PutType, args.Key, args.Value, nil, -1, nil}
+		op = &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
 	} else {
-		op = &Op{AppendType, args.Key, args.Value, nil, -1, nil}
+		op = &Op{AppendType, args.Key, args.Value, nil, -1, nil, -1}
 	}
 
 	cmd := kv.buildCmd(op, args.ClientId, args.SequenceId)
@@ -109,7 +95,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Debug(dServer, "G%d-S%d PutAppend debug output = %+v", kv.gid, kv.me, output)
 		if output.Err == ErrWrongLeader {
 			*reply = PutAppendReply{ErrWrongLeader}
-		} else if !kv.verifyKeyResponsibility(args.Key) {
+		} else if output.Err == ErrWrongGroup {
 			*reply = PutAppendReply{ErrWrongGroup}
 		} else if output.Err == OK {
 			*reply = PutAppendReply{OK}

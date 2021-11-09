@@ -143,4 +143,4 @@ type Task struct {
 
 const GcInterval = time.Duration(100) * time.Millisecond
 const FetchConfigInterval = time.Duration(200) * time.Millisecond
-const SendShardInterval = time.Duration(100) * time.Millisecond
+const SendShardInterval = time.Duration(200) * time.Millisecond
