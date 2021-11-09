@@ -5,7 +5,6 @@ import (
 	"6.824/raft"
 	"6.824/shardctrler"
 	"bytes"
-	"fmt"
 	"time"
 )
 
@@ -74,11 +73,10 @@ func (kv *ShardKV) constructSnapshot() []byte {
 	encoder.Encode(kv.Config)
 	encoder.Encode(kv.Version)
 	encoder.Encode(kv.ResponsibleShards)
-	encoder.Encode(kv.Ready)
-	encoder.Encode(kv.lastSentId)
+	encoder.Encode(kv.ShardStatus)
 
-	Debug(dServer, "G%d-S%d 创建快照完成，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v,lastSentId=%+v",
-		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready, kv.lastSentId)
+	Debug(dServer, "G%d-S%d 创建快照完成，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ShardStatus=%+v",
+		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards)
 	return buf.Bytes()
 }
 
@@ -95,67 +93,23 @@ func (kv *ShardKV) readSnapshotPersist(data []byte) {
 	var con shardctrler.Config
 	var version int
 	var res []int
-	var ready map[int]bool
-	var ls []int
+	var sts []string
 
 	if d.Decode(&ShardMap) != nil ||
 		d.Decode(&con) != nil ||
 		d.Decode(&version) != nil ||
 		d.Decode(&res) != nil ||
-		d.Decode(&ready) != nil ||
-		d.Decode(&ls) != nil {
+		d.Decode(&sts) != nil {
 		panic("decode err")
 	} else {
 		kv.ShardMap = ShardMap
 		kv.Config = con
 		kv.Version = version
 		kv.ResponsibleShards = res
-		kv.Ready = ready
-		kv.lastSentId = ls
+		kv.ShardStatus = sts
 	}
-	Debug(dServer, "G%d-S%d 读取snapshot持久化数据成功，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ready=%+v,lastSentId=%+v",
-		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.Ready, kv.lastSentId)
-}
-
-//修改配置
-func (kv *ShardKV) changeConfigUtil(newConfig shardctrler.Config) {
-	Debug(dTrace, "G%d-S%d changeConfigUtil new:%+v,my:%+v", kv.gid, kv.me, newConfig, kv.Config)
-	if newConfig.Num <= kv.Version {
-		//调用gotLatestConfig的方法很多，所以很容易出现并发问题，即newConfig的版本比当前的版本小等。。
-		Debug(dServer, "G%d-S%d changeConfigUtil version等同，为%d，abort", kv.gid, kv.me, newConfig.Num)
-		return
-	}
-	//Assert(newConfig.Num > kv.Version, "")
-	lastConfig := kv.Config
-	kv.setNewConfig(newConfig)
-
-	if newConfig.Num == 1 {
-		//第一次初始化
-		//初始化ready map
-		kv.Ready = map[int]bool{}
-		for _, i := range kv.ResponsibleShards {
-			kv.Ready[i] = true
-			kv.ShardMap[i] = Shard{i, map[string]string{}, map[int64]int{}, kv.Version}
-		}
-	} else {
-		//初始化ready map
-		kv.Ready = map[int]bool{}
-		for _, i := range kv.ResponsibleShards {
-			if shard, ok := kv.ShardMap[i]; ok {
-				//判断
-				if shard.LastModifyVersion == kv.Version-1 {
-					kv.Ready[i] = true
-					kv.ShardMap[i] = Shard{shard.Id, shard.State, shard.Session, kv.Version}
-					Debug(dServer, "G%d-S%d config %d->%d时，shard lastId自增 %+v", kv.gid, kv.me, lastConfig.Num, kv.Version, kv.ShardMap[i])
-				} else {
-					kv.Ready[i] = false
-				}
-			} else {
-				kv.Ready[i] = false
-			}
-		}
-	}
-	Debug(dServer, "G%d-S%d 更新config为 Config=%+v,map=%+v,Ready=%+v", kv.gid, kv.me, newConfig, kv.ShardMap, kv.Ready)
+	Debug(dServer, "G%d-S%d 读取snapshot持久化数据成功，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ShardStatus=%+v",
+		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.ShardStatus)
 }
 
 func (kv *ShardKV) setNewConfig(newConfig shardctrler.Config) {
@@ -172,337 +126,30 @@ func (kv *ShardKV) setNewConfig(newConfig shardctrler.Config) {
 	}
 }
 
-//查找所有自己的shard，判断下一跳是否存在，如果存在，而且不是我，就发送
-//重复发送会自动被lastModifyVersion过滤，所以没事
-func (kv *ShardKV) sendShards2Channel() {
+//等待分片准备好，客户端的版本号应该大于等于我的
+func (kv *ShardKV) waitUntilReady(shard int, clientVersion int) bool {
 	kv.mu.Lock()
-	isLeader := kv.isLeader()
-	lens := len(kv.migrationChan)
-	kv.mu.Unlock()
-	if !isLeader || lens > 0 {
-		return
-	}
-
-	//kv.getLatestConfig()
-
-	kv.mu.Lock()
-	Debug(dTrace, "G%d-S%d 调用sendShards2Channel kv.Config.Shards=%+v", kv.gid, kv.me, kv.Config.Shards)
-	Debug(dTrace, "G%d-S%d 调用sendShards2Channel version=%d,kv.map=%+v", kv.gid, kv.me, kv.Version, kv.ShardMap)
-	myVersion := kv.Version
-	MachineVersion := kv.MachineVersion
+	Assert(kv.Version <= clientVersion, "")
 	kv.mu.Unlock()
 
-	//maxVersion := kv.getMaxVersionOfShards()
-
-	for i := 0; i < NShards; i++ {
-		kv.mu.Lock()
-		b, ok := kv.ShardMap[i]
-		copyShard := CopyShard(b)
-		kv.mu.Unlock()
-
-		if ok {
-			//只能发送最大值-1的
-			//if copyShard.LastModifyVersion == maxVersion {
-			if copyShard.LastModifyVersion == MachineVersion {
-				Debug(dServer, "G%d-S%d shard=%+v,我的version=%d，这个shard还没修改完，所以不发送", kv.gid, kv.me, copyShard, myVersion)
-				continue
-			}
-			//lastVersion := kv.QueryOrCached(copyShard.LastModifyVersion)
-			//这个版本我负责
-			if copyShard.LastModifyVersion < myVersion {
-				//version不是最新的
-				query := kv.QueryOrCached(copyShard.LastModifyVersion + 1)
-				//无脑发送，即使下一跳是我，在rpc处理器中，会自动处理的
-				target := query.Shards[i]
-				kv.mu.Lock()
-				//if target == kv.gid && lastVersion.Shards[i] == kv.gid {
-				//	//两个都是我负责
-				//	shardMap := kv.ShardMap[i]
-				//	kv.ShardMap[i] = Shard{shardMap.Id, shardMap.State,
-				//		shardMap.Session, shardMap.LastModifyVersion + 1}
-				//	if shardMap.LastModifyVersion+1 == kv.Version {
-				//		kv.Ready[i] = true
-				//	}
-				//	Debug(dServer, "G%d-S%d shard=%+v下一个就是我负责，直接last++", kv.gid, kv.me, copyShard)
-				//	kv.mu.Unlock()
-				//	continue
-				//}
-				kv.migrationChan <- &Task{&copyShard, target} //直接发送也行，反正会转发。。
-				Debug(dServer, "G%d-S%d shard=%+v不负责，发送给下一跳：%d", kv.gid, kv.me, copyShard, target)
-				kv.mu.Unlock()
-				//s := Shard{copyShard.Id, copyShard.State, copyShard.Session, copyShard.LastModifyVersion - 1}
-				//kv.processNextStep(s, true)
-			}
-		}
-	}
-	Debug(dTrace, "G%d-S%d 调用sendShards2Channel 结束", kv.gid, kv.me)
-}
-
-//等待分片准备好，返回false代表分片不归我管了或者我不是leader了，true为已经准备好
-func (kv *ShardKV) waitUntilReady(shard int) bool {
 	for !kv.killed() {
-		kv.getLatestConfig() //拉取最新的并且等待
 
 		kv.mu.Lock()
-		isReady, ok := kv.Ready[shard]
 		isLeader := kv.isLeader()
 		isRespons := kv.verifyShardResponsibility(shard)
-		v, exists := kv.ShardMap[shard]
 		ver := kv.Version
+		status := kv.ShardStatus
 		kv.mu.Unlock()
 
-		if !ok || !isLeader || !isRespons {
+		if !isLeader || clientVersion < ver {
 			return false
 		}
-		if isReady && exists && v.LastModifyVersion == ver {
+		if clientVersion == ver && status[shard] == READY {
 			return true
 		}
 		time.Sleep(time.Duration(100) * time.Millisecond)
 	}
 	return false
-}
-
-func (kv *ShardKV) doRemoveShard(shard *Shard) {
-	Debug(dServer, "G%d-S%d task发送成功，开始进行shard删除：%+v", kv.gid, kv.me, *shard)
-
-	op := &Op{DeleteShard, "", "", shard, shard.Id, nil}
-	cmd := kv.buildCmd(op, -1, -1)
-	index, _, isLeader := kv.rf.Start(cmd)
-
-	if !isLeader {
-		//我自己不是leader了,放弃发送
-		return
-	} else {
-		output := kv.waitFor(index)
-
-		//因为重新获得锁了
-		//永远都不用重试，因为如果提交失败，就说明我不是leader了，那就放弃提交
-		//todo 会出现没有删除的情况吗
-		Debug(dServer, "G%d-S%d doRemoveShard debug output = %+v", kv.gid, kv.me, output)
-		Debug(dServer, "G%d-S%d task发送成功，shard删除结束，可能完成或失败：%+v", kv.gid, kv.me, shard)
-	}
-}
-
-//发送线程
-func (kv *ShardKV) shardSenderThread() {
-	for task := range kv.migrationChan {
-		kv.mu.Lock()
-		Debug(dServer, "G%d-S%d 开始发送task：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-		//记录lastSent
-		if kv.lastSentId[task.Shard.Id] >= task.Shard.LastModifyVersion {
-			Debug(dServer, "G%d-S%d lastSent大于发送的version，放弃发送task：%+v，shard=%+v,lastSent=%+v", kv.gid, kv.me, *task, *task.Shard, kv.lastSentId)
-			kv.mu.Unlock()
-			continue
-		} else {
-			kv.lastSentId[task.Shard.Id] = task.Shard.LastModifyVersion
-		}
-	tryAgain:
-		if !kv.isLeader() {
-			Debug(dServer, "G%d-S%d 我不是leader，放弃发送task：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-			kv.mu.Unlock()
-			continue
-		}
-		kv.mu.Unlock()
-
-		//不断尝试发送，发送的时候不能加锁！，否则可能导致互相发送，然后就死锁了，因为无法进入rpc handler！
-		code := kv.sendShardTo(task)
-
-		kv.mu.Lock()
-		if code == 1 {
-			//进行删除日志提交
-			kv.doRemoveShard(task.Shard)
-		} else if code == 2 {
-			Debug(dServer, "G%d-S%d task ErrWrongGroup，放弃发送task：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-			kv.mu.Unlock()
-			continue
-		} else if code == 3 {
-			//code==3，重试
-			Debug(dServer, "G%d-S%d task code==3，重试：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-			goto tryAgain
-		} else {
-			kv.mu.Unlock()
-			continue
-		}
-
-		Debug(dServer, "G%d-S%d 发送task完成：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-		kv.mu.Unlock()
-	}
-}
-
-//返回状态码1：ok，2：放弃发送，3：重试发送,4被移除
-//细粒度的锁，也会导致互斥性比较弱，导致方法内状态改变
-func (kv *ShardKV) sendShardTo(task *Task) int {
-	Debug(dTrace, "G%d-S%d sendShardTo：%+v，shard=%+v", kv.gid, kv.me, *task, *task.Shard)
-
-	for {
-		kv.mu.Lock()
-		v := kv.MachineVersion == task.Shard.LastModifyVersion
-		kv.mu.Unlock()
-		if !v {
-			break
-		}
-		Debug(dTrace, "G%d-S%d sendShardTo：kv.MachineVersion == task.Shard.LastModifyVersion，sleep 50ms", kv.gid, kv.me)
-		time.Sleep(time.Duration(50) * time.Millisecond)
-	}
-	kv.mu.Lock()
-	c := kv.QueryOrCached(task.Shard.LastModifyVersion + 1) //直接找下一跳
-	target := c.Shards[task.Shard.Id]
-	Assert(target == task.Target, "")
-	targetServers := make([]string, len(c.Groups[task.Target]))
-	copy(targetServers, c.Groups[task.Target])
-	kv.mu.Unlock()
-	index := 0
-	Debug(dTrace, "G%d-S%d sendShardTo：targetServers=%+v", kv.gid, kv.me, targetServers)
-	if len(targetServers) == 0 {
-		//kv.mu.Lock()
-		//kv.ShardMap[task.Shard.Id] = Shard{task.Shard.Id, task.Shard.State, task.Shard.Session,
-		//	task.Shard.LastModifyVersion + 1}
-		//kv.mu.Unlock()
-		Debug(dTrace, "G%d-S%d sendShardTo：target group=%d 已经被移除,所以自增LastModifyVersion", kv.gid, kv.me, task.Target)
-		panic(1)
-		return 4
-	}
-
-	living := 0
-	for index < len(targetServers) {
-		kv.mu.Lock()
-		end := kv.make_end(targetServers[index])
-		//fixme !!!
-		args := &ReceiveShardArgs{*task.Shard, int64(kv.gid*(-1) - 1), 1}
-		reply := &ReceiveShardReply{}
-		kv.mu.Unlock()
-
-		ok := end.Call("ShardKV.ReceiveShard", args, reply)
-		//Debug(dTrace, "G%d-S%d fuck! sendShardTo：ok=%v,end=%v;%v", kv.gid, kv.me, ok, end, targetServers[index])
-
-		//reply是安全的，不用加锁
-		if ok {
-			if reply.Err == ErrWrongLeader {
-				index++
-				living++
-				continue
-			} else if reply.Err == ErrWrongGroup {
-				//接收方发现这个shard自己不负责
-				return 2
-			} else if reply.Err == OK {
-				return 1
-			}
-		} else {
-			//检查一下要发送的东西是不是被移除了
-			kv.mu.Lock()
-			if len(kv.Config.Groups[task.Target]) == 0 {
-				kv.ShardMap[task.Shard.Id] = Shard{task.Shard.Id, task.Shard.State, task.Shard.Session,
-					task.Shard.LastModifyVersion + 1}
-				kv.mu.Unlock()
-				Debug(dTrace, "G%d-S%d sendShardTo：target group=%d 已经被移除,所以自增LastModifyVersion", kv.gid, kv.me, task.Target)
-				return 4
-			}
-			kv.mu.Unlock()
-			//Debug(dTrace, "G%d-S%d sendShardTo：ok=false,retry!", kv.gid, kv.me)
-			index++ //因为存在shutdown server的可能，即让服务器关闭，此时返回ok=false，或者说，要考虑到宕机的情况，所以一个请求不通就发送另一个
-			continue
-		}
-	}
-	if living >= 1 {
-		return 3 //因为一直wrong leader，可能正在选举
-	} else {
-		return 2 //根本没有能访问的，都是false。。
-	}
-}
-
-func (kv *ShardKV) getConfigFor(version int) {
-	Debug(dServer, "G%d-S%d 调用 getConfigFor version=%d", kv.gid, kv.me, version)
-
-	kv.mu.Lock()
-	isLeader := kv.isLeader()
-	thisVersion := kv.Version
-	kv.mu.Unlock() //fixme
-
-	query := kv.QueryOrCached(version) //这里不要锁定！
-
-	if !isLeader {
-		Debug(dServer, "G%d-S%d 我不是leader,不拉取配置，abort", kv.gid, kv.me)
-		return
-	}
-
-	if !isLeader {
-		Debug(dServer, "G%d-S%d 我不是leader,不拉取配置，abort", kv.gid, kv.me)
-		return
-	}
-	//如果查找的version太大了，就会自动退出return
-	if query.Num == -1 {
-		Debug(dServer, "G%d-S%d version=%d太大，没找到配置", kv.gid, kv.me, version)
-		return
-	}
-
-	Assert(query.Num >= thisVersion, fmt.Sprintf("query:%+v,my version=%d", query, thisVersion))
-	if query.Num == thisVersion {
-		//直接添加任务
-		//if sendShardIfVersionEquals {
-		//	if len(kv.migrationChan) == 0 {
-		//		Debug(dServer, "G%d-S%d version等同，添加发送shard任务", kv.gid, kv.me)
-		//		kv.sendShards2Channel()
-		//	}
-		//}
-	} else {
-		//index := 0
-		isLeader := false
-		//保证changeConfig日志是一次一次提交的，否则就可能出现无法初始化的情况，因为上来就是num=3了之类的
-		start := raft.Max(1, thisVersion+1)
-		for i := start; i <= query.Num; i++ {
-			thisConfig := kv.QueryOrCached(i)
-			op := &Op{ChangeConfig, "", "", nil, -1, &thisConfig}
-			cmd := kv.buildCmd(op, -1, -1)
-			Debug(dServer, "G%d-S%d 广播配置更新日志config=%+v", kv.gid, kv.me, thisConfig)
-			_, _, isLeader = kv.rf.Start(cmd)
-
-			if !isLeader {
-				Debug(dServer, "G%d-S%d 广播配置更新日志:我不是leader，abort", kv.gid, kv.me)
-				return
-			}
-
-			kv.mu.Lock()                    //调用gotLatestConfig的方法很多，所以很容易出现并发问题
-			kv.changeConfigUtil(thisConfig) //负责list也会修改
-			Debug(dServer, "G%d-S%d 拉取配置结束,最终修改为%+v", kv.gid, kv.me, kv.Config)
-			kv.mu.Unlock()
-		}
-
-		//因为日志已经提交了，所以直接修改为最新的，即可保证后续log中的entry一定是我负责的！
-		//但是follower仍然是通过日志来修改config的
-		//kv.mu.Lock()
-		//if kv.Version >= thisConfig.Num {
-		//	kv.mu.Unlock()
-		//	continue
-		//}
-		//kv.mu.Unlock()
-
-		//thisConfig := kv.QueryOrCached(query.Num)
-		//kv.mu.Lock()                    //调用gotLatestConfig的方法很多，所以很容易出现并发问题
-		//kv.changeConfigUtil(thisConfig) //负责list也会修改
-		////kv.sendShards2Channel()
-		//Debug(dServer, "G%d-S%d 拉取配置结束,最终修改为%+v", kv.gid, kv.me, kv.Config)
-		//kv.mu.Unlock()
-
-		//kv.mu.Lock()
-		//output := kv.waitFor(index)
-		//kv.mu.Unlock()
-
-		////因为重新获得锁了
-		//Debug(dServer, "G%d-S%d GetConfigFor debug output = %+v", kv.gid, kv.me, output)
-		//if output.Err == ErrWrongLeader {
-		//	Debug(dServer, "G%d-S%d 广播配置更新日志:我不是leader，abort", kv.gid, kv.me)
-		//} else if output.Err == OK {
-		//	Debug(dServer, "G%d-S%d 广播配置更新日志:配置日志广播完成", kv.gid, kv.me)
-		//} else {
-		//	panic(1)
-		//}
-	}
-	Debug(dServer, "G%d-S%d 拉取配置结束", kv.gid, kv.me)
-}
-
-//不加锁
-func (kv *ShardKV) getLatestConfig() {
-	kv.getConfigFor(-1)
 }
 
 //不会自动fetch
@@ -534,39 +181,6 @@ func (kv *ShardKV) findWhoResponsibleForShard(shard int) int {
 	defer kv.mu.Unlock()
 
 	return kv.Config.Shards[shard]
-}
-
-func (kv *ShardKV) clearChan() {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
-	for i := 0; i < len(kv.migrationChan); i++ {
-		_ = <-kv.migrationChan
-	}
-}
-
-func (kv *ShardKV) fetchConfigThread() {
-	time.Sleep(time.Duration(200) * time.Millisecond)
-	for !kv.killed() {
-		kv.mu.Lock()
-		isLeader := kv.isLeader()
-		version := kv.Version
-		kv.mu.Unlock()
-
-		if isLeader {
-			//拉取最新的配置
-			if version == -1 {
-				//应该初始化，拉取num=1的配置;直接手动提交
-				Debug(dServer, "G%d-S%d 初始化线程：开始初始化", kv.gid, kv.me)
-				kv.getConfigFor(1)
-				Debug(dServer, "G%d-S%d 初始化线程：初始化完成", kv.gid, kv.me)
-			} else {
-				kv.getLatestConfig()
-			}
-		}
-
-		time.Sleep(time.Duration(500) * time.Millisecond)
-	}
 }
 
 func (kv *ShardKV) waitUtilInit() {
@@ -619,70 +233,33 @@ func (kv *ShardKV) QueryOrCached(version int) shardctrler.Config {
 	return query
 }
 
-//计算下一跳，找到最大的还是自己负责的，直接更新last，如果等于，就发送
-func (kv *ShardKV) processNextStep(shard Shard, fetch bool) int {
-	Debug(dTrace, "G%d-S%d processNextStep 输入shard=%+v", kv.gid, kv.me, shard)
+func (kv *ShardKV) submitNewReceiveLog(shard Shard, version int) (int, bool) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	if fetch {
-		kv.getLatestConfig()
-	}
-	if kv.Version == shard.LastModifyVersion {
-		Debug(dTrace, "G%d-S%d processNextStep abort，因为version已经是最新", kv.gid, kv.me)
-		return -1
-	}
 
-	p := kv.QueryOrCached(shard.LastModifyVersion + 1)
-	if p.Shards[shard.Id] != kv.gid {
-		Debug(dTrace, "G%d-S%d processNextStep abort，因为我不负责这个shard", kv.gid, kv.me)
-		return -2
-	}
-	if kv.Version == shard.LastModifyVersion+1 {
-		//不够下2跳，自己留着
-		s := Shard{shard.Id, shard.State, shard.Session, shard.LastModifyVersion + 1}
-		Debug(dTrace, "G%d-S%d processNextStep 不够下2跳，自己留着", kv.gid, kv.me)
-		index, _ := kv.submitNewReceiveLog(s)
-		return index
-	}
-	m := -1
-	//找到最大的还是自己负责的
-	for i := shard.LastModifyVersion + 2; i <= kv.Version; i++ {
-		q := kv.QueryOrCached(i)
-		if q.Shards[shard.Id] == kv.gid {
-			m = q.Num
-		}
-	}
-	Debug(dTrace, "G%d-S%d processNextStep m=%d", kv.gid, kv.me, m)
-	if m == -1 {
-		//只能路由到+2
-		s := &Shard{shard.Id, shard.State, shard.Session, shard.LastModifyVersion + 1}
-		nextNextConfig := kv.QueryOrCached(shard.LastModifyVersion + 2)
-		kv.migrationChan <- &Task{s, nextNextConfig.Shards[shard.Id]}
-		Debug(dTrace, "G%d-S%d processNextStep 路由到last+2=G%d", kv.gid, kv.me, nextNextConfig.Shards[shard.Id])
-		return -3
-	} else {
-		if m == kv.Version {
-			//我可以直接负责
-			s := Shard{shard.Id, shard.State, shard.Session, kv.Version}
-			index, _ := kv.submitNewReceiveLog(s)
-			Debug(dTrace, "G%d-S%d processNextStep 最终还是我负责，直接提交=%+v", kv.gid, kv.me, s)
-			return index
-		} else {
-			//路由到m+1
-			s := &Shard{shard.Id, shard.State, shard.Session, m}
-			nextNextConfig := kv.QueryOrCached(m + 1)
-			kv.migrationChan <- &Task{s, nextNextConfig.Shards[shard.Id]}
-			Debug(dTrace, "G%d-S%d processNextStep 路由到version= %d,G%d", kv.gid, kv.me, m+1, nextNextConfig.Shards[shard.Id])
-			return -4
-		}
-	}
+	op := &Op{ReceiveShard, "", "", &shard, shard.Id, nil, version}
+	cmd := kv.buildCmd(op, -1, -1)
+	index, _, isLeader := kv.rf.Start(cmd)
+
+	return index, isLeader
 }
 
-func (kv *ShardKV) submitNewReceiveLog(shard Shard) (int, bool) {
+func (kv *ShardKV) submitNewDeleteLog(shardId int) (int, bool) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	op := &Op{ReceiveShard, "", "", &shard, shard.Id, nil}
+	op := &Op{DeleteShard, "", "", nil, shardId, nil, -1}
+	cmd := kv.buildCmd(op, -1, -1)
+	index, _, isLeader := kv.rf.Start(cmd)
+
+	return index, isLeader
+}
+
+func (kv *ShardKV) submitNewConfigLog(config shardctrler.Config) (int, bool) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	op := &Op{ChangeConfig, "", "", nil, -1, &config, -1}
 	cmd := kv.buildCmd(op, -1, -1)
 	index, _, isLeader := kv.rf.Start(cmd)
 
@@ -693,12 +270,160 @@ func (kv *ShardKV) isReady(shard int) bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	r := true
+	return kv.Config.Shards[shard] == kv.gid && kv.ShardStatus[shard] == READY
+}
 
-	isReady, ok := kv.Ready[shard]
-	isLeader := kv.isLeader()
-	v, exists := kv.ShardMap[shard]
+func (kv *ShardKV) setNewStatus(from, to shardctrler.Config) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
-	r = r && ok && isReady && isLeader && exists
-	return r && v.LastModifyVersion == kv.Version
+	for i := 0; i < NShards; i++ {
+		if from.Shards[i] == kv.gid && to.Shards[i] == kv.gid {
+			kv.ShardStatus[i] = READY
+		} else if from.Shards[i] == kv.gid && to.Shards[i] != kv.gid {
+			kv.ShardStatus[i] = OUT
+		} else if from.Shards[i] != kv.gid && to.Shards[i] == kv.gid {
+			kv.ShardStatus[i] = IN
+		} else {
+			//我一直不负责
+			Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine, "")
+		}
+	}
+	Debug(dTrace, "G%d-S%d 更新新的statusMap=%+v", kv.gid, kv.me, kv.ShardStatus)
+}
+
+//必须没有in和out的，即可fetch
+func (kv *ShardKV) canFetchConfig() bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	can := true
+	for i := 0; i < NShards; i++ {
+		if kv.ShardStatus[i] == IN || kv.ShardStatus[i] == OUT {
+			can = false
+			break
+		}
+	}
+	return can && kv.isLeader()
+}
+
+func (kv *ShardKV) GCThread() {
+
+	for !kv.killed() {
+		kv.mu.Lock()
+		if !kv.isLeader() {
+			kv.mu.Unlock()
+			continue
+		}
+
+		for i := 0; i < NShards; i++ {
+			if kv.ShardStatus[i] == GC {
+				if _, ok := kv.ShardMap[i]; ok {
+					kv.submitNewDeleteLog(i)
+					Debug(dServer, "G%d-S%d GCThread GC shard=%d", kv.gid, kv.me, i)
+				} else {
+					panic("GC ERR")
+				}
+			}
+		}
+		Debug(dServer, "G%d-S%d GCThread,done", kv.gid, kv.me)
+		kv.mu.Unlock()
+		time.Sleep(GcInterval)
+	}
+
+}
+
+// PullConfigThread 不用同步waitFor；即使rpc handler中错误的认为自己负责，那也会在状态机中返回不负责
+//如果认为自己不负责，client自动重试
+//TODO client + version
+func (kv *ShardKV) PullConfigThread() {
+
+	for !kv.killed() {
+		kv.mu.Lock()
+		version := kv.Version
+		isLeader := kv.isLeader()
+		kv.mu.Unlock()
+
+		if !isLeader {
+			continue
+		}
+
+		if !kv.canFetchConfig() {
+			Debug(dServer, "G%d-S%d PullConfigThread,config没迁移完，无法进行下一次拉取,status=%+v", kv.gid, kv.me, kv.ShardStatus)
+		} else {
+			query := kv.QueryOrCached(version + 1) //初始化的时候是0，所以自动拉取1，在状态机中初始化即可！
+			if query.Num != 0 {
+				//有下一个配置
+				kv.submitNewConfigLog(query) //todo 同步？
+				//这里可能提交失败的，因为2 1网络分区
+				Debug(dServer, "G%d-S%d PullConfigThread,fetch config=%+v", kv.gid, kv.me, query)
+			} else {
+				Debug(dServer, "G%d-S%d PullConfigThread,无下一个config，当前version=%d", kv.gid, kv.me, version)
+			}
+		}
+		Debug(dServer, "G%d-S%d PullConfigThread,done", kv.gid, kv.me)
+		kv.mu.Unlock()
+		time.Sleep(FetchConfigInterval)
+	}
+
+}
+
+func (kv *ShardKV) SendShardThread() {
+
+	for !kv.killed() {
+		kv.mu.Lock()
+		if !kv.isLeader() {
+			kv.mu.Unlock()
+			continue
+		}
+
+		for i := 0; i < NShards; i++ {
+			if kv.ShardStatus[i] == OUT {
+				if _, ok := kv.ShardMap[i]; !ok {
+					panic(1)
+				}
+				Debug(dServer, "G%d-S%d SendShardThread,send shard=%+v", kv.gid, kv.me, kv.ShardMap[i])
+				go kv.doSendShard(kv.ShardMap[i])
+			}
+		}
+		Debug(dServer, "G%d-S%d SendShardThread,done", kv.gid, kv.me)
+		kv.mu.Unlock()
+		time.Sleep(SendShardInterval)
+	}
+
+}
+
+func (kv *ShardKV) doSendShard(shard Shard) {
+	kv.mu.Lock()
+	target := kv.Config.Shards[shard.Id]
+	version := kv.Version
+	targetServers := kv.Config.Groups[target]
+	kv.mu.Unlock()
+
+	for _, server := range targetServers {
+		end := kv.make_end(server)
+		args := &ReceiveShardArgs{shard, -1, -1, version}
+		reply := &ReceiveShardReply{}
+
+		ok := end.Call("ShardKV.ReceiveShard", args, reply)
+
+		if !ok {
+			continue
+		}
+
+		if reply.Err == OK {
+			//迁移成功
+			kv.mu.Lock()
+			kv.ShardStatus[shard.Id] = GC
+			kv.mu.Unlock()
+			return
+		} else if reply.Err == ErrWrongLeader {
+			continue
+		} else if reply.Err == ErrWrongGroup {
+			panic(1)
+		} else if reply.Err == ErrNotReady || reply.Err == ErrOutdated {
+			return
+			//等待下次发送
+		}
+	}
+
 }

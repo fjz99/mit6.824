@@ -5,6 +5,7 @@ import (
 	"6.824/raft"
 	"6.824/shardctrler"
 	"sync"
+	"time"
 )
 
 //
@@ -21,7 +22,8 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
-	ErrRedirect    = "ErrRedirect"
+	ErrNotReady    = "ErrNotReady"
+	ErrOutdated    = "ErrOutdated"
 )
 
 type Err string
@@ -52,6 +54,7 @@ type ReceiveShardArgs struct {
 	Shard      Shard
 	ClientId   int64 //会话id
 	SequenceId int
+	Version    int
 }
 
 type ReceiveShardReply struct {
@@ -71,12 +74,13 @@ type Command struct {
 }
 
 type Op struct {
-	Type    OpType
-	Key     string
-	Value   string              //get忽略；put就是value；append就是args
-	Shard   *Shard              //接收到的shard
-	ShardId int                 //删除的shard id
-	Config  *shardctrler.Config //新添加的config
+	Type         OpType
+	Key          string
+	Value        string              //get忽略；put就是value；append就是args
+	Shard        *Shard              //接收到的shard
+	ShardId      int                 //删除的shard id
+	Config       *shardctrler.Config //新添加的config
+	TheirVersion int                 //发送方的version
 }
 
 const (
@@ -90,11 +94,18 @@ const (
 
 type OpType string
 
+const (
+	IN      = "IN"
+	OUT     = "OUT"
+	READY   = "READY"
+	GC      = "GC"
+	NotMine = "NOT_MINE"
+)
+
 type Shard struct {
-	Id                int
-	State             map[string]string
-	Session           map[int64]int //会话；也要快照
-	LastModifyVersion int           //!!!
+	Id      int
+	State   map[string]string
+	Session map[int64]int //会话；也要快照
 }
 
 type ShardKV struct {
@@ -121,26 +132,15 @@ type ShardKV struct {
 	QueryCache        map[int]shardctrler.Config //查询缓存
 	ResponsibleShards []int                      //snap
 	Version           int                        //当前的版本号,snap
-	MachineVersion    int                        //状态机执行到的版本号
 	mck               *shardctrler.Clerk
-
-	//分片转移
-	migrationChan chan *Task
-	Ready         map[int]bool //指的是分片是否准备好了,snap
-	lastSentId    []int
-}
-
-func (kv *ShardKV) getMaxVersionOfShards() int {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	m := -1
-	for _, v := range kv.ShardMap {
-		m = raft.Max(m, v.LastModifyVersion)
-	}
-	return m
+	ShardStatus       []string //snap
 }
 
 type Task struct {
 	Shard  *Shard
 	Target int //发给谁
 }
+
+const GcInterval = time.Duration(100) * time.Millisecond
+const FetchConfigInterval = time.Duration(200) * time.Millisecond
+const SendShardInterval = time.Duration(100) * time.Millisecond
