@@ -1,18 +1,5 @@
 package shardkv
 
-//todo 分片迁移的内容是空值
-//todo 状态机对shard的迁移的时候，如果这个shard已经存在？
-//todo 增加序列号，保证不重复
-//todo 速度很慢
-//todo 给shard附上最后修改的版本号，多次接收的话，选取最大的进行覆盖；因为并发变更，可能一次发送完了，然后执行，然后第二次又发送了
-//todo 添加多个发送线程，否则太慢了
-//todo 多次添加重复的change config命令。。
-//todo 记录所有历史版本
-//todo 历史版本不持久化
-//todo 发送时不会清空发送队列
-//todo 要保证版本一下一下变，接收方接收到之后，检查last版本，然后获得他的下一个版本，如果就是我那就行，否则就转发这样增加last号
-//todo condInstallSnapshot 有bug
-
 import (
 	"6.824/labrpc"
 	"6.824/shardctrler"
@@ -106,6 +93,15 @@ func (kv *ShardKV) changeConfig(CommandIndex int, command Command) {
 		//都加一了，肯定不重复。。
 		kv.setNewStatus(kv.Config, *newConfig)
 		kv.setNewConfig(*newConfig)
+		if newConfig.Num == 1 {
+			//初始化
+			for i := 0; i < NShards; i++ {
+				if newConfig.Shards[i] == kv.gid {
+					kv.ShardMap[i] = Shard{Id: i, State: map[string]string{}, Session: map[int64]int{}}
+					kv.ShardStatus[i] = READY
+				}
+			}
+		}
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig成功！"}
 	}
 }
