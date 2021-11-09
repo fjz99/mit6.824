@@ -281,7 +281,12 @@ func (kv *ShardKV) setNewStatus(from, to shardctrler.Config) {
 			kv.ShardStatus[i] = IN
 		} else {
 			//我一直不负责
-			Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine, "")
+			//对于主节点而言，发送shard成功后会设置为GC，然后提交log，但是对于从节点而言，此时还是OUT，但是没关系，等从节点执行到delete的时候，就会设置为NOTMINE了
+			if kv.isLeader() {
+				Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine, "")
+			} else {
+				Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine || kv.ShardStatus[i] == OUT, "")
+			}
 		}
 	}
 	Debug(dTrace, "G%d-S%d 更新新的statusMap=%+v", kv.gid, kv.me, kv.ShardStatus)
@@ -338,15 +343,16 @@ func (kv *ShardKV) PullConfigThread() {
 		kv.mu.Lock()
 		version := kv.Version
 		isLeader := kv.isLeader()
+		status := kv.ShardStatus
 		kv.mu.Unlock()
 
 		if !isLeader {
 			time.Sleep(FetchConfigInterval)
 			continue
 		}
-		Debug(dServer, "G%d-S%d PullConfigThread,开始pull version=%d,status=%+v", kv.gid, kv.me, kv.Version, kv.ShardStatus)
+		Debug(dServer, "G%d-S%d PullConfigThread,开始pull version=%d,status=%+v", kv.gid, kv.me, kv.Version, status)
 		if !kv.canFetchConfig() {
-			Debug(dServer, "G%d-S%d PullConfigThread,config没迁移完，无法进行下一次拉取,status=%+v", kv.gid, kv.me, kv.ShardStatus)
+			Debug(dServer, "G%d-S%d PullConfigThread,config没迁移完，无法进行下一次拉取,status=%+v", kv.gid, kv.me, status)
 		} else {
 			query := kv.QueryOrCached(version + 1) //初始化的时候是0，所以自动拉取1，在状态机中初始化即可！
 			if query.Num != 0 {
@@ -358,7 +364,7 @@ func (kv *ShardKV) PullConfigThread() {
 				Debug(dServer, "G%d-S%d PullConfigThread,无下一个config，当前version=%d", kv.gid, kv.me, version)
 			}
 		}
-		Debug(dServer, "G%d-S%d PullConfigThread,done,status=%+v", kv.gid, kv.me, kv.ShardStatus)
+		Debug(dServer, "G%d-S%d PullConfigThread,done,status=%+v", kv.gid, kv.me, status)
 		//kv.mu.Unlock()
 		time.Sleep(FetchConfigInterval)
 	}

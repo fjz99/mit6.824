@@ -82,7 +82,7 @@ func (kv *ShardKV) applier() {
 
 func (kv *ShardKV) changeConfig(CommandIndex int, command Command) {
 	newConfig := command.Op.Config
-	Debug(dMachine, "G%d-S%d 执行changeConfig命令,index=%d,config=%+v,status=%+v", kv.gid, kv.me, CommandIndex, *newConfig, kv.ShardStatus)
+	Debug(dMachine, "G%d-S%d 执行changeConfig命令,index=%d,newConfig=%+v,status=%+v", kv.gid, kv.me, CommandIndex, *newConfig, kv.ShardStatus)
 
 	if newConfig.Num != kv.Version+1 {
 		Debug(dMachine, "G%d-S%d 执行changeConfig命令，changeConfig失败，操作数的config=%d ！= 我的=%d +1",

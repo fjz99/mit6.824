@@ -416,7 +416,7 @@ func (rf *Raft) processLeader() {
 			if states.to == CANDIDATE {
 				//CANDIDATE是超时转换的！
 				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
-			} else {
+			} else if states.to == FOLLOWER {
 				//变成follower了,清空发送队列
 				rf.cleanupSenderChannel()
 				Debug(dLeader, "leader 被 S%d term=%d 降级了为follower！，清空发送队列", rf.me, rf.LeaderId, rf.term)
