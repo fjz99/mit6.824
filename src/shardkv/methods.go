@@ -2,7 +2,6 @@ package shardkv
 
 import (
 	"6.824/labgob"
-	"6.824/raft"
 	"6.824/shardctrler"
 	"bytes"
 	"fmt"
@@ -33,7 +32,7 @@ func (kv *ShardKV) waitFor(index int) *StateMachineOutput {
 }
 
 func (kv *ShardKV) buildCmd(op *Op, id int64, seqId int) Command {
-	return Command{*op, id, seqId, raft.GetNow()}
+	return Command{*op, id, seqId}
 }
 
 //这个方法不会检查是否负责这个分片
@@ -77,7 +76,7 @@ func (kv *ShardKV) constructSnapshot() []byte {
 	encoder.Encode(kv.ShardStatus)
 
 	Debug(dServer, "G%d-S%d 创建快照完成，ShardMap=%+v,config=%+v,version=%+v,ResponsibleShards=%+v,ShardStatus=%+v",
-		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards)
+		kv.gid, kv.me, kv.ShardMap, kv.Config, kv.Version, kv.ResponsibleShards, kv.ShardStatus)
 	return buf.Bytes()
 }
 
@@ -138,23 +137,23 @@ func (kv *ShardKV) waitUntilReady(shard int, clientVersion int) bool {
 		kv.mu.Lock()
 		isLeader := kv.isLeader()
 		//isRespons := kv.verifyShardResponsibility(shard)
-		//ver := kv.Version
+		ver := kv.Version
 		status := kv.ShardStatus[shard]
 		kv.mu.Unlock()
 
-		//if !isLeader || clientVersion < ver {
-		//	return false
-		//}
-		//if clientVersion == ver && status[shard] == READY {
-		//	return true
-		//}
-		if !isLeader {
+		if !isLeader || clientVersion < ver {
 			return false
 		}
-		if status == READY {
+		if clientVersion == ver && status == READY {
 			return true
 		}
-		time.Sleep(time.Duration(100) * time.Millisecond)
+		//if !isLeader {
+		//	return false
+		//}
+		//if status == READY {
+		//	return true
+		//}
+		time.Sleep(time.Duration(50) * time.Millisecond)
 	}
 	return false
 }
@@ -343,7 +342,8 @@ func (kv *ShardKV) PullConfigThread() {
 		kv.mu.Lock()
 		version := kv.Version
 		isLeader := kv.isLeader()
-		status := kv.ShardStatus
+		var status = make([]string, len(kv.ShardStatus))
+		copy(status, kv.ShardStatus)
 		kv.mu.Unlock()
 
 		if !isLeader {
@@ -355,7 +355,8 @@ func (kv *ShardKV) PullConfigThread() {
 			Debug(dServer, "G%d-S%d PullConfigThread,config没迁移完，无法进行下一次拉取,status=%+v", kv.gid, kv.me, status)
 		} else {
 			query := kv.QueryOrCached(version + 1) //初始化的时候是0，所以自动拉取1，在状态机中初始化即可！
-			if query.Num != 0 {
+			if query.Num != -1 {
+				//默认是0，但是我修改过，，
 				//有下一个配置
 				kv.submitNewConfigLog(query) //todo 同步？
 				//这里可能提交失败的，因为2 1网络分区
@@ -437,4 +438,12 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 		}
 	}
 
+}
+
+func (kv *ShardKV) checkSnapshot() {
+	size := kv.persister.RaftStateSize()
+	if kv.maxraftstate > 0 && float64(size) >= float64(kv.maxraftstate)*Proportion {
+		Debug(dServer, "G%d-S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.gid, kv.me, size, kv.maxraftstate)
+		kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
+	}
 }

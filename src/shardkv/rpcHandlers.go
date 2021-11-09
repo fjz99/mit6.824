@@ -4,7 +4,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 	Debug(dServer, "G%d-S%d 接收到Get rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard, -1) //因为会sleep
+	ok := kv.waitUntilReady(shard, args.Version) //因为会sleep
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -16,17 +16,23 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
 			return
 		}
+		if kv.Version != args.Version {
+			Assert(kv.Version < args.Version, "")
+			*reply = GetReply{ErrOutdated, ""}
+			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+			return
+		}
 		if !kv.verifyKeyResponsibility(args.Key) {
 			*reply = GetReply{ErrWrongGroup, ""}
 			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
 			return
 		}
-	} else {
-		//isReady := kv.ShardStatus[shard]
-		//isLeader := kv.isLeader()
-		//isRespons := kv.verifyShardResponsibility(shard)
-		//_, has := kv.ShardMap[shard]
-		//Assert(ok && isReady && isLeader && isRespons && has, fmt.Sprintf("%v,%v,%v,%v,%v", ok, isReady, isLeader, isRespons, has))
+	}
+	if kv.Version != args.Version {
+		Assert(kv.Version < args.Version, "")
+		*reply = GetReply{ErrOutdated, ""}
+		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		return
 	}
 
 	op := &Op{GetType, args.Key, "", nil, -1, nil, -1}
@@ -58,7 +64,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	Debug(dServer, "G%d-S%d 接收到PutAppend rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard, -1)
+	ok := kv.waitUntilReady(shard, args.Version)
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -70,11 +76,23 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 			return
 		}
+		if kv.Version != args.Version {
+			Assert(kv.Version < args.Version, "")
+			*reply = PutAppendReply{ErrOutdated}
+			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+			return
+		}
 		if !kv.verifyKeyResponsibility(args.Key) {
 			*reply = PutAppendReply{ErrWrongGroup}
 			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 			return
 		}
+	}
+	if kv.Version != args.Version {
+		Assert(kv.Version < args.Version, "")
+		*reply = PutAppendReply{ErrOutdated}
+		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		return
 	}
 	op := &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
 	if args.Op == "Put" {
@@ -140,12 +158,12 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 	}
 
 	//version相同了
-	//if kv.ShardStatus[shard.Id] != IN {
-	//	Assert(kv.ShardStatus[shard.Id] == READY, "")
-	//	*reply = ReceiveShardReply{OK}
-	//	Debug(dServer, "G%d-S%d ReceiveShard rpc,返回 %+v", kv.gid, kv.me, *reply)
-	//	return
-	//}
+	if kv.ShardStatus[shard.Id] != IN {
+		Assert(kv.ShardStatus[shard.Id] == READY, "")
+		*reply = ReceiveShardReply{OK}
+		Debug(dServer, "G%d-S%d ReceiveShard rpc,返回 %+v", kv.gid, kv.me, *reply)
+		return
+	}
 
 	index, _ := kv.submitNewReceiveLog(shard, args.Version)
 

@@ -3,13 +3,14 @@ package shardkv
 import (
 	"6.824/labrpc"
 	"6.824/shardctrler"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 import "6.824/raft"
 import "6.824/labgob"
+
+//todo 打包发送，一次发送所有的OUT shard
 
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *ShardKV) applier() {
@@ -39,10 +40,11 @@ func (kv *ShardKV) applier() {
 			Assert(op.CommandValid, "")
 			Debug(dMachine, "G%d-S%d 状态机开始执行命令%+v,index=%d,status=%+v", kv.gid, kv.me, cmd, op.CommandIndex, kv.ShardStatus)
 			if op.CommandIndex <= kv.lastApplied {
+				kv.checkSnapshot()
 				kv.mu.Unlock()
 				continue
 			}
-			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op))
+			//Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op))
 
 			switch cmd.Op.Type {
 			case PutType:
@@ -68,11 +70,7 @@ func (kv *ShardKV) applier() {
 			}
 			kv.lastApplied++
 			//判断当前的字节数是否太大了
-			size := kv.persister.RaftStateSize()
-			if kv.maxraftstate > 0 && size >= kv.maxraftstate {
-				Debug(dServer, "G%d-S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.gid, kv.me, size, kv.maxraftstate)
-				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
-			}
+			kv.checkSnapshot()
 			Debug(dMachine, "G%d-S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d,status=%+v", kv.gid, kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied, kv.ShardStatus)
 		}
 		kv.commitIndexCond.Broadcast() //装载快照的话，lastApplied也会变
@@ -365,6 +363,13 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 			kv.commitIndexCond.Broadcast()
 		}
 	}()
+
+	//go func() {
+	//	for !kv.killed() {
+	//		time.Sleep(time.Duration(50) * time.Millisecond)
+	//		fmt.Println("size", kv.persister.RaftStateSize())
+	//	}
+	//}()
 
 	return kv
 }

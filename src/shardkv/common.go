@@ -35,6 +35,7 @@ type PutAppendArgs struct {
 	Op         string // "Put" or "Append"
 	ClientId   int64
 	SequenceId int
+	Version    int
 }
 
 type PutAppendReply struct {
@@ -42,7 +43,8 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
+	Key     string
+	Version int
 }
 
 type GetReply struct {
@@ -70,7 +72,6 @@ type Command struct {
 	Op         Op
 	ClientId   int64 //会话id
 	SequenceId int
-	Timestamp  int64 //完成会话超时功能
 }
 
 type Op struct {
@@ -121,7 +122,7 @@ type ShardKV struct {
 
 	dead int32 // set by Kill()
 
-	lastApplied int                         //因为有chan，不用也行，但是有的话可以构建从1开始的，忽略nil的id；不用快照
+	lastApplied int                         //因为有chan，不用也行，但是有的话可以构建从1开始的，忽略nil的id；snap
 	output      map[int]*StateMachineOutput //对应index的输出；不需要快照，只要重新执行命令即可
 	n           int
 	persister   *raft.Persister
@@ -141,6 +142,7 @@ type Task struct {
 	Target int //发给谁
 }
 
-const GcInterval = time.Duration(100) * time.Millisecond
-const FetchConfigInterval = time.Duration(200) * time.Millisecond
-const SendShardInterval = time.Duration(200) * time.Millisecond
+const GcInterval = time.Duration(150) * time.Millisecond
+const FetchConfigInterval = time.Duration(90) * time.Millisecond
+const SendShardInterval = time.Duration(150) * time.Millisecond
+const Proportion = 0.8

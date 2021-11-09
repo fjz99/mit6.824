@@ -72,6 +72,7 @@ func (ck *Clerk) Get(key string) string {
 		ck.config = ck.sm.Query(-1)
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		args.Version = ck.config.Num
 		Debug(dClient, "C%d 调用get，key=%s,选择group为 %d", ck.clientId, key, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
@@ -85,6 +86,10 @@ func (ck *Clerk) Get(key string) string {
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
 					Debug(dClient, "C%d 调用get，key=%s,group WRONG", ck.clientId, key)
+					break
+				}
+				if ok && reply.Err == ErrOutdated {
+					//我的版本太低了,重试
 					break
 				}
 				// ... not ok, or ErrWrongLeader
@@ -112,6 +117,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ck.config = ck.sm.Query(-1)
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		args.Version = ck.config.Num
 		Debug(dClient, "C%d 调用PutAppend %s，key=%s,value='%s',选择gid=%d", ck.clientId, op, key, value, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
@@ -124,6 +130,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				}
 				if ok && reply.Err == ErrWrongGroup {
 					Debug(dClient, "C%d 调用put append，key=%s,group WRONG", ck.clientId, key)
+					break
+				}
+				if ok && reply.Err == ErrOutdated {
+					//我的版本太低了,重试
 					break
 				}
 				// ... not ok, or ErrWrongLeader
