@@ -353,7 +353,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	}
 
 	go kv.PullConfigThread()
-	go kv.GCThread()
+	//go kv.GCThread()
 	go kv.SendShardThread()
 	go kv.applier()
 

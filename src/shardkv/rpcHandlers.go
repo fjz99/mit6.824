@@ -16,24 +16,24 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
 			return
 		}
-		if kv.Version != args.Version {
-			Assert(kv.Version < args.Version, "")
-			*reply = GetReply{ErrOutdated, ""}
-			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-			return
-		}
+		//if kv.Version != args.Version {
+		//	Assert(kv.Version < args.Version, "")
+		//	*reply = GetReply{ErrOutdated, ""}
+		//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		//	return
+		//}
 		if !kv.verifyKeyResponsibility(args.Key) {
 			*reply = GetReply{ErrWrongGroup, ""}
 			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
 			return
 		}
 	}
-	if kv.Version != args.Version {
-		Assert(kv.Version < args.Version, "")
-		*reply = GetReply{ErrOutdated, ""}
-		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-		return
-	}
+	//if kv.Version != args.Version {
+	//	Assert(kv.Version < args.Version, "")
+	//	*reply = GetReply{ErrOutdated, ""}
+	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+	//	return
+	//}
 
 	op := &Op{GetType, args.Key, "", nil, -1, nil, -1}
 	cmd := kv.buildCmd(op, -1, -1)
@@ -76,24 +76,24 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 			return
 		}
-		if kv.Version != args.Version {
-			Assert(kv.Version < args.Version, "")
-			*reply = PutAppendReply{ErrOutdated}
-			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-			return
-		}
+		//if kv.Version != args.Version {
+		//	Assert(kv.Version < args.Version, "")
+		//	*reply = PutAppendReply{ErrOutdated}
+		//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		//	return
+		//}
 		if !kv.verifyKeyResponsibility(args.Key) {
 			*reply = PutAppendReply{ErrWrongGroup}
 			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 			return
 		}
 	}
-	if kv.Version != args.Version {
-		Assert(kv.Version < args.Version, "")
-		*reply = PutAppendReply{ErrOutdated}
-		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-		return
-	}
+	//if kv.Version != args.Version {
+	//	Assert(kv.Version < args.Version, "")
+	//	*reply = PutAppendReply{ErrOutdated}
+	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+	//	return
+	//}
 	op := &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
 	if args.Op == "Put" {
 		op = &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
@@ -147,6 +147,7 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 
 	if args.Version < version {
 		*reply = ReceiveShardReply{ErrOutdated}
+		//这里需要返回ok，因为存在一个case：主节点挂了，从节点变成主节点，从节点是OUT，进行重发，但是这个group的节点已经进入了下一个version。。
 		Debug(dServer, "G%d-S%d ReceiveShard rpc,返回 %+v", kv.gid, kv.me, *reply)
 		return
 	}
