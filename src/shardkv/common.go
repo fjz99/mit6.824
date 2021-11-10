@@ -107,6 +107,7 @@ type Shard struct {
 	Id      int
 	State   map[string]string
 	Session map[int64]int //会话；也要快照
+	//Version int
 }
 
 type ShardKV struct {
@@ -142,7 +143,7 @@ type Task struct {
 	Target int //发给谁
 }
 
-const GcInterval = time.Duration(150) * time.Millisecond
 const FetchConfigInterval = time.Duration(90) * time.Millisecond
 const SendShardInterval = time.Duration(150) * time.Millisecond
 const Proportion = 0.8
+const WaitUntilReadyTimeout = 500 //ms

@@ -2,8 +2,10 @@ package shardkv
 
 import (
 	"6.824/labgob"
+	"6.824/raft"
 	"6.824/shardctrler"
 	"bytes"
+	"fmt"
 	"time"
 )
 
@@ -126,12 +128,18 @@ func (kv *ShardKV) setNewConfig(newConfig shardctrler.Config) {
 }
 
 //等待分片准备好，客户端的版本号应该大于等于我的
+//加一个超时时间即可，否则可能死锁，永远无法ready
 func (kv *ShardKV) waitUntilReady(shard int, clientVersion int) bool {
 	//kv.mu.Lock()
 	//Assert(kv.Version <= clientVersion, "")
 	//kv.mu.Unlock()
+	st := raft.GetNow() //ms
 
 	for !kv.killed() {
+		if raft.GetNow()-st > WaitUntilReadyTimeout {
+			Debug(dTrace, "G%d-S%d waitUntilReady [TIMEOUT],shard=%d", kv.gid, kv.me, shard)
+			return false
+		}
 
 		kv.mu.Lock()
 		isLeader := kv.isLeader()
@@ -200,17 +208,17 @@ func (kv *ShardKV) QueryOrCached(version int) shardctrler.Config {
 		kv.QueryCache[query.Num] = query
 		kv.mu.Unlock()
 
-		if query.Num == -1 {
-			Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
-		}
+		//if query.Num == -1 {
+		//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
+		//}
 		return query
 	}
 	kv.mu.Lock()
 	if v, ok := kv.QueryCache[version]; ok {
 		kv.mu.Unlock()
-		if v.Num == -1 {
-			Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, v)
-		}
+		//if v.Num == -1 {
+		//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, v)
+		//}
 		return v
 	}
 	kv.mu.Unlock()
@@ -220,9 +228,9 @@ func (kv *ShardKV) QueryOrCached(version int) shardctrler.Config {
 	kv.mu.Lock()
 	kv.QueryCache[query.Num] = query
 	kv.mu.Unlock()
-	if query.Num == -1 {
-		Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
-	}
+	//if query.Num == -1 {
+	//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
+	//}
 	return query
 }
 
@@ -237,13 +245,16 @@ func (kv *ShardKV) submitNewReceiveLog(shard Shard, version int) (int, bool) {
 	return index, isLeader
 }
 
-func (kv *ShardKV) submitNewDeleteLog(shardId int) (int, bool) {
+func (kv *ShardKV) submitNewDeleteLog(shardId int, version int) (int, bool) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	op := &Op{DeleteShard, "", "", nil, shardId, nil, -1}
+	op := &Op{DeleteShard, "", "", nil, shardId, nil, version}
 	cmd := kv.buildCmd(op, -1, -1)
 	index, _, isLeader := kv.rf.Start(cmd)
+
+	Debug(dServer, "G%d-S%d submitNewDeleteLog，shard=%+v",
+		kv.gid, kv.me, shardId)
 
 	return index, isLeader
 }
@@ -273,10 +284,16 @@ func (kv *ShardKV) setNewStatus(from, to shardctrler.Config) {
 
 	for i := 0; i < NShards; i++ {
 		if from.Shards[i] == kv.gid && to.Shards[i] == kv.gid {
+			Assert(kv.ShardStatus[i] == READY, fmt.Sprintf("G%d-S%d call setNewStatus,statusMap=%+v,from=%+v,to=%+v",
+				kv.gid, kv.me, kv.ShardStatus, from, to))
 			kv.ShardStatus[i] = READY
 		} else if from.Shards[i] == kv.gid && to.Shards[i] != kv.gid {
+			Assert(kv.ShardStatus[i] == READY, fmt.Sprintf("G%d-S%d call setNewStatus,statusMap=%+v,from=%+v,to=%+v",
+				kv.gid, kv.me, kv.ShardStatus, from, to))
 			kv.ShardStatus[i] = OUT
 		} else if from.Shards[i] != kv.gid && to.Shards[i] == kv.gid {
+			Assert(kv.ShardStatus[i] == NotMine, fmt.Sprintf("G%d-S%d call setNewStatus,statusMap=%+v,from=%+v,to=%+v",
+				kv.gid, kv.me, kv.ShardStatus, from, to))
 			kv.ShardStatus[i] = IN
 			//这里如果直接设定为in的话，可能发生GC丢失，就会导致从节点永远是out，此时从节点也没有delete命令，就导致发生assert错误。。
 		} else {
@@ -284,11 +301,13 @@ func (kv *ShardKV) setNewStatus(from, to shardctrler.Config) {
 			//我一直不负责
 			//对于主节点而言，发送shard成功后会设置为GC，然后提交log，但是对于从节点而言，此时还是OUT，但是没关系，等从节点执行到delete的时候，就会设置为NOTMINE了
 			//可能一个节点本来是从节点，然后选举变成了主节点，此时就导致他是OUT、但是因为GC有延迟，所以还没
-			if kv.isLeader() {
-				Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine, "")
-			} else {
-				Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine || kv.ShardStatus[i] == OUT, "")
-			}
+			Assert(kv.ShardStatus[i] == NotMine, fmt.Sprintf("G%d-S%d call setNewStatus,statusMap=%+v,from=%+v,to=%+v",
+				kv.gid, kv.me, kv.ShardStatus, from, to))
+			//if kv.isLeader() {
+			//	Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine, "")
+			//} else {
+			//	Assert(kv.ShardStatus[i] == GC || kv.ShardStatus[i] == NotMine || kv.ShardStatus[i] == OUT, "")
+			//}
 		}
 	}
 	Debug(dTrace, "G%d-S%d 更新新的statusMap=%+v", kv.gid, kv.me, kv.ShardStatus)
@@ -307,34 +326,6 @@ func (kv *ShardKV) canFetchConfig() bool {
 	}
 	return can && kv.isLeader()
 }
-
-//func (kv *ShardKV) GCThread() {
-//
-//	for !kv.killed() {
-//		kv.mu.Lock()
-//		if !kv.isLeader() {
-//			kv.mu.Unlock()
-//			time.Sleep(GcInterval)
-//			continue
-//		}
-//		Debug(dServer, "G%d-S%d GCThread,开始GC %+v", kv.gid, kv.me, kv.ShardStatus)
-//		for i := 0; i < NShards; i++ {
-//			if kv.ShardStatus[i] == GC {
-//				if _, ok := kv.ShardMap[i]; ok {
-//					kv.submitNewDeleteLog(i)
-//					//kv.ShardStatus[i] = NotMine//?? fixme因为异步删除，所以可能多次submit
-//					Debug(dServer, "G%d-S%d GCThread GC shard=%d", kv.gid, kv.me, i)
-//				} else {
-//					panic(fmt.Sprintf("GC ERR %+v %+v", kv.ShardMap, kv.ShardStatus))
-//				}
-//			}
-//		}
-//		Debug(dServer, "G%d-S%d GCThread,done", kv.gid, kv.me)
-//		kv.mu.Unlock()
-//		time.Sleep(GcInterval)
-//	}
-//
-//}
 
 // PullConfigThread 不用同步waitFor；即使rpc handler中错误的认为自己负责，那也会在状态机中返回不负责
 //如果认为自己不负责，client自动重试
@@ -390,24 +381,25 @@ func (kv *ShardKV) SendShardThread() {
 					panic(1)
 				}
 				Debug(dServer, "G%d-S%d SendShardThread,send shard=%+v", kv.gid, kv.me, kv.ShardMap[i])
-				go kv.doSendShard(kv.ShardMap[i])
+				go kv.doSendShard(kv.ShardMap[i], kv.Version)
 			}
 		}
-		Debug(dServer, "G%d-S%d SendShardThread,done,status=%+v", kv.gid, kv.me, kv.ShardStatus)
 		kv.mu.Unlock()
 		time.Sleep(SendShardInterval)
 	}
 
 }
 
-func (kv *ShardKV) doSendShard(shard Shard) {
+//version通过参数传入，这是因为SendShardThread方法是同步的，而且判断过是否需要发送了
+//doSendShard方法有lock，是重新加锁，有风险。。
+func (kv *ShardKV) doSendShard(shard Shard, version int) {
 	kv.mu.Lock()
 	target := kv.Config.Shards[shard.Id]
-	version := kv.Version
+	newVersion := kv.Version
 	targetServers := kv.Config.Groups[target]
 	isLeader := kv.isLeader()
 	kv.mu.Unlock()
-	if !isLeader {
+	if !isLeader || newVersion > version {
 		return
 	}
 
@@ -423,7 +415,7 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 		}
 
 		kv.mu.Lock()
-		Debug(dServer, "G%d-S%d SendShardThread,doSendShard,status=%+v，reply=%+v", kv.gid, kv.me, kv.ShardStatus, reply)
+		Debug(dServer, "G%d-S%d SendShardThread,doSendShard,shard=%+v,status=%+v，reply=%+v", kv.gid, kv.me, shard, kv.ShardStatus, reply)
 		kv.mu.Unlock()
 
 		//存在一个case：主节点挂了，从节点变成主节点，从节点是OUT，进行重发，但是这个group的节点已经进入了下一个version。。此时就会永远无法进入下个version
@@ -432,13 +424,23 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 			//迁移成功
 			kv.mu.Lock()
 			//可能重复发送，导致重复接收到ok，但是可能已经gc完成了，变成NOT MINE了
+			Assert(kv.Version >= version, "")
+			//这里意义不大
+			if kv.Version > version {
+				Debug(dServer, "G%d-S%d WARN:SendShardThread,doSendShard,shard=%+v,rpc返回后version发生改变%d->%d，所以不提交日志，abort",
+					kv.gid, kv.me, shard, version, kv.Version)
+				kv.mu.Unlock()
+				return
+			}
 			if kv.ShardStatus[shard.Id] == OUT {
 				kv.ShardStatus[shard.Id] = GC
-				_, isLeader := kv.submitNewDeleteLog(shard.Id)
+				index, isLeader := kv.submitNewDeleteLog(shard.Id, version)
 				if !isLeader {
 					kv.mu.Unlock()
 					return
 				}
+				Debug(dServer, "G%d-S%d SendShardThread,doSendShard,提交日志成功，index=%d，isLeader=%v，shard=%+v",
+					kv.gid, kv.me, index, isLeader, shard)
 			}
 			kv.mu.Unlock()
 			return
@@ -447,6 +449,7 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 		} else if reply.Err == ErrWrongGroup {
 			panic(1)
 		} else if reply.Err == ErrNotReady {
+			Debug(dServer, "G%d-S%d SendShardThread,doSendShard,shard=%+v,ErrNotReady", kv.gid, kv.me, shard)
 			return
 			//等待下次发送
 		}

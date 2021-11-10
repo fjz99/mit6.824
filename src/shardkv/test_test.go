@@ -497,7 +497,11 @@ func TestConcurrent3(t *testing.T) {
 	}
 
 	t0 := time.Now()
+	index := 0
 	for time.Since(t0) < 12*time.Second {
+		fmt.Println("iter=", index)
+		index++
+
 		cfg.join(2)
 		cfg.join(1)
 		time.Sleep(time.Duration(rand.Int()%900) * time.Millisecond)
@@ -516,6 +520,7 @@ func TestConcurrent3(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	fmt.Println("wait!")
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch

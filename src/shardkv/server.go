@@ -11,6 +11,7 @@ import "6.824/raft"
 import "6.824/labgob"
 
 //todo 打包发送，一次发送所有的OUT shard
+//todo 尝试delete同步提交
 
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *ShardKV) applier() {
@@ -133,7 +134,7 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 	if !kv.verifyShardResponsibility(shardId) {
 		panic(1)
 	}
-	//因为发送频率太高了，可能多次发送，导致当前状态其实是READY
+	//因为发送频率太高了，可能多次发送，导致当前状态其实是READY，所以不要覆盖
 	if kv.ShardStatus[shardId] == READY {
 		Assert(exists, "")
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "shard已经ready了"}
@@ -154,6 +155,14 @@ func (kv *ShardKV) deleteShard(CommandIndex int, command Command) {
 	shardId := command.Op.ShardId
 
 	Debug(dMachine, "G%d-S%d 执行deleteShard命令,index=%d,shardId=%d,shard=%+v,status=%+v", kv.gid, kv.me, CommandIndex, shardId, command.Op.Shard, kv.ShardStatus)
+
+	if command.Op.TheirVersion < kv.Version {
+		kv.output[CommandIndex] = &StateMachineOutput{ErrOutdated, "ErrOutdated！"}
+		Debug(dMachine, "G%d-S%d WARN:执行deleteShard命令,shard=%+v,status=%+v,version变化%d->%d，放弃delete", kv.gid,
+			kv.me, command.Op.Shard, kv.ShardStatus, command.Op.TheirVersion, kv.Version)
+		return
+	}
+
 	//检验了也没啥用，因为是自己提交的，clientId=-1
 	if kv.checkDuplicate(CommandIndex, command) {
 		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复delete！", kv.gid, kv.me, shardId)
