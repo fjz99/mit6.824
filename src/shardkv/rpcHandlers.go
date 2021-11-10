@@ -131,6 +131,7 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 	isLeader := kv.isLeader()
 	version := kv.Version
 	myconfig := kv.Config
+	status := kv.copyShardStatus()
 	kv.mu.Unlock()
 
 	if !isLeader {
@@ -159,8 +160,8 @@ func (kv *ShardKV) ReceiveShard(args *ReceiveShardArgs, reply *ReceiveShardReply
 	}
 
 	//version相同了
-	if kv.ShardStatus[shard.Id] != IN {
-		Assert(kv.ShardStatus[shard.Id] == READY, "")
+	if status[shard.Id] != IN {
+		Assert(status[shard.Id] == READY, "")
 		*reply = ReceiveShardReply{OK}
 		Debug(dServer, "G%d-S%d ReceiveShard rpc,返回 %+v", kv.gid, kv.me, *reply)
 		return

@@ -405,7 +405,11 @@ func (kv *ShardKV) doSendShard(shard Shard) {
 	target := kv.Config.Shards[shard.Id]
 	version := kv.Version
 	targetServers := kv.Config.Groups[target]
+	isLeader := kv.isLeader()
 	kv.mu.Unlock()
+	if !isLeader {
+		return
+	}
 
 	for _, server := range targetServers {
 		end := kv.make_end(server)
@@ -456,4 +460,10 @@ func (kv *ShardKV) checkSnapshot() {
 		Debug(dServer, "G%d-S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.gid, kv.me, size, kv.maxraftstate)
 		kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
 	}
+}
+
+func (kv *ShardKV) copyShardStatus() []string {
+	s := make([]string, len(kv.ShardStatus))
+	copy(s, kv.ShardStatus)
+	return s
 }
