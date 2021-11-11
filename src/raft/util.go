@@ -174,10 +174,10 @@ func (rf *Raft) FollowerUpdateCommitIndex(args *AppendEntriesArgs) {
 	//c := Min(LeaderCommit, myMatchIndex) //follower就不用唤醒cond了
 	if rf.commitIndex < rf.snapshotIndex {
 		//快照还没有安装
-		//fixme 加入挂了的话，重启的时候commitId=-1，此时如果不更新的话，就会超时
 		Debug(dTrace, "快照index=%d，commitIndex=%d，快照还没有安装，拒绝更新commitId", rf.me, rf.snapshotIndex, rf.commitIndex)
 		return
 	}
+	//这个没有也可以。。
 	temp := -1
 	if args.Log == nil {
 		temp = Min(args.LeaderCommit, args.PrevLogIndex) //对应 commitId
@@ -455,4 +455,25 @@ func (rf *Raft) GetLeaderId() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.LeaderId
+}
+
+// SetCommitIndex 一种不好的设计，破坏了封装性
+func (rf *Raft) SetCommitIndex(mi int) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	//这个index是状态机从1开始的index。。。
+	ci := -1
+	if mi == rf.snapshotMachineIndex {
+		ci = rf.snapshotIndex
+	} else {
+		for i := 0; i < len(rf.log); i++ {
+			if rf.log[i].Index+1 == mi { //+1
+				ci = rf.IndexSmall2Big(i)
+				break
+			}
+		}
+	}
+	rf.commitIndex = Max(rf.commitIndex, ci)
+	return rf.commitIndex
 }

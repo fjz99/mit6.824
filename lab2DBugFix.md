@@ -14,3 +14,7 @@ follower接收到快照的时候，会发送到chan中，从而状态机就可�
 10. condInstall快照方法，如果返回true，需要把commitId设置为snapId，此外如果快照的indexd大于commitId，那么此时commitId无法更新，必须等待安装快照后，才可能更新
 这样就可以保证对于上层应用来说，commitId是连续的，或者就是需要安装快照了
 11. 节点挂了之后，不要持久化commitId，这样的话，commitId就会从头增长，此时状态机就可以再次恢复状态，此外，如果有快照的话，节点重启的时候，也要发送快照
+12. 节点崩溃后的日志重放，必须借助于心跳或者AE rpc的commitIndex字段
+13. 关于快照和commitIndex的关系：
+    直接根据快照index和lastAplied判断是否使用快照即可，但是注意，这种设计可能接收到比lastAplied小的commit log，因为可能先发送了log，但是网络卡顿，第二次发送了
+    快照，快照反而先调用installSnapshot RPC，此时先执行了快照，就导致后续的commit log的index小于当前的lastAplied

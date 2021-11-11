@@ -26,4 +26,20 @@
 receive shard会同步提交，不怕网络分区（如果不是同步提交的话，2 1网络分区的 1的leader，会返回ok，此时发送方不发送了，OK了，2那一组会死锁）
 日志会自己拉取，2 1分区的leader都会自己拉取，不怕网络分区
 而对于删除而言，如果发生2 1网络分区，那么会有2个leader一起进行发送，因为重复收到会返回ok，所以可以异步提交
-12. 
+11. 关于快照和commitIndex的关系：
+    直接根据快照index和lastAplied判断是否使用快照即可，但是注意，这种设计可能接收到比lastAplied小的commit log，因为可能先发送了log，但是网络卡顿，第二次发送了
+    快照，快照反而先调用installSnapshot RPC，此时先执行了快照，就导致后续的commit log的index小于当前的lastAplied
+12. 最后一个bug，raft state size太大，这是因为我的代码没有使用condInstallSnapshot，而这个condInstallSnapshot方法中会更新commitIndex，这就导致我即使安装了快照
+    也不会更新commitIndex
+    我有一段代码：
+    if rf.commitIndex < rf.snapshotIndex {
+    //快照还没有安装
+    Debug(dTrace, "快照index=%d，commitIndex=%d，快照还没有安装，拒绝更新commitId", rf.me, rf.snapshotIndex, rf.commitIndex)
+    return
+    }
+    这个是有意义的！
+    CondInstallSnapshot难以设计，因为状态机的执行是有延迟的，如果单纯判断snap index大于commitIndex的话，状态机可能没执行到最后，而判断的却是最后这个index
+    解决办法就是在rf层加一个lastApplied，因为发送的applyChan是同步的，所以就可以发送一次就增加一次lastApplied。
+    这样就可以通过判断这个lastApplied，来确定是否安装快照了
+    但是我的设计方式是直接加一个raft层的接口，setCommitIndex，由service层直接设置Commit index，注意service层的index是从1开始忽略nil的，需要做一层转换即可
+13. 客户端确实不需要版本号，delete log也确实不需要同步提交

@@ -4,30 +4,23 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 	Debug(dServer, "G%d-S%d 接收到Get rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard, args.Version) //因为会sleep
+	kv.waitUntilReady(shard, args.Version) //因为会sleep
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	Debug(dTrace, "G%d-S%d waitUntilReady 结束，当前version为%d,status=%+v", kv.gid, kv.me, kv.Version, kv.ShardStatus)
 
-	if !ok {
-		if !kv.isLeader() {
-			*reply = GetReply{ErrWrongLeader, ""}
-			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
-			return
-		}
-		//if kv.Version != args.Version {
-		//	Assert(kv.Version < args.Version, "")
-		//	*reply = GetReply{ErrOutdated, ""}
-		//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-		//	return
-		//}
-		if !kv.verifyKeyResponsibility(args.Key) {
-			*reply = GetReply{ErrWrongGroup, ""}
-			Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
-			return
-		}
+	if !kv.isLeader() {
+		*reply = GetReply{ErrWrongLeader, "fast"}
+		Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
+		return
 	}
+	if !kv.verifyKeyResponsibility(args.Key) {
+		*reply = GetReply{ErrWrongGroup, ""}
+		Debug(dServer, "G%d-S%d Get rpc,返回 %+v", kv.gid, kv.me, *reply)
+		return
+	}
+
 	//if kv.Version != args.Version {
 	//	Assert(kv.Version < args.Version, "")
 	//	*reply = GetReply{ErrOutdated, ""}
@@ -47,7 +40,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		//因为重新获得锁了
 		Debug(dServer, "G%d-S%d Get debug output = %+v", kv.gid, kv.me, output)
 		if output.Err == ErrWrongLeader {
-			*reply = GetReply{ErrWrongLeader, ""}
+			*reply = GetReply{ErrWrongLeader, "slow"}
 		} else if output.Err == ErrWrongGroup {
 			*reply = GetReply{ErrWrongGroup, ""}
 		} else if output.Err == OK {
@@ -64,29 +57,27 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	Debug(dServer, "G%d-S%d 接收到PutAppend rpc,args=%+v,对应分片为%d", kv.gid, kv.me, *args, key2shard(args.Key))
 	shard := key2shard(args.Key)
-	ok := kv.waitUntilReady(shard, args.Version)
+	kv.waitUntilReady(shard, args.Version)
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	Debug(dTrace, "G%d-S%d PutAppend rpc,args=%+v： waitUntilReady 结束，当前version为%d,status=%+v", kv.gid, kv.me, *args, kv.Version, kv.ShardStatus)
 
-	if !ok {
-		if !kv.isLeader() {
-			*reply = PutAppendReply{ErrWrongLeader}
-			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-			return
-		}
-		//if kv.Version != args.Version {
-		//	Assert(kv.Version < args.Version, "")
-		//	*reply = PutAppendReply{ErrOutdated}
-		//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-		//	return
-		//}
-		if !kv.verifyKeyResponsibility(args.Key) {
-			*reply = PutAppendReply{ErrWrongGroup}
-			Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-			return
-		}
+	if !kv.isLeader() {
+		*reply = PutAppendReply{ErrWrongLeader}
+		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		return
+	}
+	//if kv.Version != args.Version {
+	//	Assert(kv.Version < args.Version, "")
+	//	*reply = PutAppendReply{ErrOutdated}
+	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+	//	return
+	//}
+	if !kv.verifyKeyResponsibility(args.Key) {
+		*reply = PutAppendReply{ErrWrongGroup}
+		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
+		return
 	}
 	//if kv.Version != args.Version {
 	//	Assert(kv.Version < args.Version, "")

@@ -33,6 +33,9 @@ func (kv *ShardKV) applier() {
 				Debug(dServer, "G%d-S%d 装载快照,快照index=%d，我的lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
 				kv.readSnapshotPersist(op.Snapshot)
 				kv.lastApplied = op.SnapshotIndex
+				index := kv.rf.SetCommitIndex(kv.lastApplied)
+				Debug(dServer, "G%d-S%d 装载快照,更新lastApplied=%d，raft commitIndex=%d",
+					kv.gid, kv.me, kv.lastApplied, index)
 			} else {
 				Debug(dServer, "G%d-S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
 			}
@@ -71,7 +74,8 @@ func (kv *ShardKV) applier() {
 			}
 			kv.lastApplied++
 			//判断当前的字节数是否太大了
-			if cmd.Op.Type == ReceiveShard || cmd.Op.Type == DeleteShard {
+			Debug(dWarn, "G%d-S%d snap size=%d,state size=%d", kv.gid, kv.me, kv.persister.SnapshotSize(), kv.persister.RaftStateSize())
+			if kv.maxraftstate > 0 && (cmd.Op.Type == ReceiveShard || cmd.Op.Type == DeleteShard) {
 				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
 			} else {
 				kv.checkSnapshot()
@@ -380,7 +384,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	//go func() {
 	//	for !kv.killed() {
 	//		time.Sleep(time.Duration(50) * time.Millisecond)
-	//		fmt.Println("size", kv.persister.RaftStateSize())
+	//		fmt.Printf("G%d-S%d state size=%d,snap size=%d \n",
+	//			kv.gid, kv.me, kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
+	//		if kv.persister.RaftStateSize() >= 7000 {
+	//			panic(fmt.Sprintf("G%d-S%d state size=%d,snap size=%d \n",
+	//				kv.gid, kv.me, kv.persister.RaftStateSize(), kv.persister.SnapshotSize()))
+	//		}
 	//	}
 	//}()
 
