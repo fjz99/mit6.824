@@ -253,8 +253,7 @@ func (kv *ShardKV) submitNewDeleteLog(shardId int, version int) (int, bool) {
 	cmd := kv.buildCmd(op, -1, -1)
 	index, _, isLeader := kv.rf.Start(cmd)
 
-	Debug(dServer, "G%d-S%d submitNewDeleteLog，shard=%+v",
-		kv.gid, kv.me, shardId)
+	Debug(dServer, "G%d-S%d submitNewDeleteLog，shard=%+v", kv.gid, kv.me, shardId)
 
 	return index, isLeader
 }
@@ -433,12 +432,16 @@ func (kv *ShardKV) doSendShard(shard Shard, version int) {
 				return
 			}
 			if kv.ShardStatus[shard.Id] == OUT {
-				kv.ShardStatus[shard.Id] = GC
 				index, isLeader := kv.submitNewDeleteLog(shard.Id, version)
 				if !isLeader {
+					Debug(dTrace, "G%d-S%d SendShardThread,doSendShard, !isLeader return shard=%+v", kv.gid, kv.me, shard)
 					kv.mu.Unlock()
 					return
 				}
+				kv.ShardStatus[shard.Id] = GC //提交没问题，不是leader才设置为GC
+				//receive shard会同步提交，不怕网络分区（如果不是同步提交的话，2 1网络分区的 1的leader，会返回ok，此时发送方不发送了，OK了，2那一组会死锁）
+				//日志会自己拉取，2 1分区的leader都会自己拉取，不怕网络分区
+				//而对于删除而言，如果发生2 1网络分区，那么会有2个leader一起进行发送，因为重复收到会返回ok，所以可以异步提交
 				Debug(dServer, "G%d-S%d SendShardThread,doSendShard,提交日志成功，index=%d，isLeader=%v，shard=%+v",
 					kv.gid, kv.me, index, isLeader, shard)
 			}

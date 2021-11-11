@@ -71,7 +71,11 @@ func (kv *ShardKV) applier() {
 			}
 			kv.lastApplied++
 			//判断当前的字节数是否太大了
-			kv.checkSnapshot()
+			if cmd.Op.Type == ReceiveShard || cmd.Op.Type == DeleteShard {
+				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
+			} else {
+				kv.checkSnapshot()
+			}
 			Debug(dMachine, "G%d-S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d,status=%+v", kv.gid, kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied, kv.ShardStatus)
 		}
 		kv.commitIndexCond.Broadcast() //装载快照的话，lastApplied也会变

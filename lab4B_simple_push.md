@@ -1,7 +1,7 @@
 1. 代码见simple push branch
 2. persister.RaftStateSize() 11101, but maxraftstate 1000;因为每次get等都会写入日志，但是因为不是提交，所以没法快照，然后就超了。。
-3. //存在一个case：主节点挂了，从节点变成主节点，从节点是OUT，进行重发，但是这个group的节点已经进入了下一个version。。此时就会永远无法进入下个version
-    //所以ErrOutdated也需要认为是确认收到，因为他肯定曾经收到了，才version++了，才会收到ErrOutdated
+3. 存在一个case：主节点挂了，从节点变成主节点，从节点是OUT，进行重发，但是这个group的节点已经进入了下一个version。。此时就会永远无法进入下个version
+所以ErrOutdated也需要认为是确认收到，因为他肯定曾经收到了，才version++了，才会收到ErrOutdated
 见doSendShard方法
 4. 修改shard ctrler，使其query rpc不需日志提交，这样可以加快速度，但是不可靠（存在1 2网络分区故障脑裂）
 5. 不需要GC Thread，直接push成功后日志提交即可，但是可以异步提交，因为提交上之后，就有了日志。
@@ -22,3 +22,8 @@
 解决办法是使用版本号，加一个版本号
 9. waitUntilReady有一个问题，就是如果不考虑客户端的version的话。只考虑能READY就写的话也行，但是需要加一个超时时间，因为可能永远都不会ready。。因为分片配置的关系。。
 加一个超时时间即可
+10. 日志同步提交和异步提交的问题：
+receive shard会同步提交，不怕网络分区（如果不是同步提交的话，2 1网络分区的 1的leader，会返回ok，此时发送方不发送了，OK了，2那一组会死锁）
+日志会自己拉取，2 1分区的leader都会自己拉取，不怕网络分区
+而对于删除而言，如果发生2 1网络分区，那么会有2个leader一起进行发送，因为重复收到会返回ok，所以可以异步提交
+12. 
