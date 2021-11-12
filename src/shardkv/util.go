@@ -17,14 +17,7 @@ const DebugEnabled = true
 const (
 	dClient  logTopic = "CLNT"
 	dMachine logTopic = "MACH" //状态机
-	dCommit  logTopic = "CMIT"
-	dError   logTopic = "ERRO"
-	dInfo    logTopic = "INFO"
 	dServer  logTopic = "SEVE"
-	dLog     logTopic = "LOG1"
-	dLog2    logTopic = "LOG2"
-	dSnap    logTopic = "SNAP"
-	dTest    logTopic = "TEST"
 	dTrace   logTopic = "TRCE"
 	dWarn    logTopic = "WARN"
 )
@@ -101,28 +94,8 @@ func CopySessionMap(src map[int64]int) map[int64]int {
 	return res
 }
 
-func ChangeArray2FixedArray(src []int) [NShards]int {
-	Assert(len(src) == NShards, "")
-	arr := [NShards]int{}
-	for i := 0; i < NShards; i++ {
-		arr[i] = src[i]
-	}
-	return arr
-}
-
 func DeleteArrayIndex(src []int, index int) []int {
 	return append(src[:index], src[(index+1):]...)
-}
-
-func DeleteArrayValue(src []int, target int) []int {
-	//删除第一个
-	i := 0
-	for i = 0; i < len(src); i++ {
-		if src[i] == target {
-			break
-		}
-	}
-	return DeleteArrayIndex(src, i)
 }
 
 func key2shard(key string) int {
@@ -138,6 +111,5 @@ func CopyShard(src Shard) Shard {
 	s := Shard{Id: src.Id}
 	s.State = CopyMap(src.State)
 	s.Session = CopySessionMap(src.Session)
-	s.LastModifyVersion = src.LastModifyVersion
 	return s
 }

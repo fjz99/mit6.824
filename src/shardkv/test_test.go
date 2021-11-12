@@ -242,11 +242,11 @@ func TestMissChange(t *testing.T) {
 	cfg.ShutdownServer(0, 0)
 	cfg.ShutdownServer(1, 0)
 	cfg.ShutdownServer(2, 0)
-	fmt.Println("fucker!0")
+	//fmt.Println("fucker!0")
 	cfg.join(2)
 	cfg.leave(1)
 	cfg.leave(0)
-	fmt.Println("fucker!1")
+	//fmt.Println("fucker!1")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -256,7 +256,7 @@ func TestMissChange(t *testing.T) {
 	}
 
 	cfg.join(1)
-	fmt.Println("fucker!2")
+	//fmt.Println("fucker!2")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -267,7 +267,7 @@ func TestMissChange(t *testing.T) {
 	cfg.StartServer(0, 0)
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
-	fmt.Println("fucker!3")
+	//fmt.Println("fucker!3")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -340,13 +340,13 @@ func TestConcurrent1(t *testing.T) {
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	fmt.Println("join1")
+	//fmt.Println("join1")
 	cfg.join(1)
 	time.Sleep(500 * time.Millisecond)
-	fmt.Println("join2")
+	//fmt.Println("join2")
 	cfg.join(2)
 	time.Sleep(500 * time.Millisecond)
-	fmt.Println("leave0")
+	//fmt.Println("leave0")
 	cfg.leave(0)
 
 	cfg.ShutdownGroup(0)
@@ -354,7 +354,7 @@ func TestConcurrent1(t *testing.T) {
 	cfg.ShutdownGroup(1)
 	time.Sleep(100 * time.Millisecond)
 	cfg.ShutdownGroup(2)
-	fmt.Println("leave2")
+	//fmt.Println("leave2")
 	cfg.leave(2)
 
 	time.Sleep(100 * time.Millisecond)
@@ -363,21 +363,21 @@ func TestConcurrent1(t *testing.T) {
 	cfg.StartGroup(2)
 
 	time.Sleep(100 * time.Millisecond)
-	fmt.Println("join0")
+	//fmt.Println("join0")
 	cfg.join(0)
-	fmt.Println("leave1")
+	//fmt.Println("leave1")
 	cfg.leave(1)
 	time.Sleep(500 * time.Millisecond)
-	fmt.Println("join1")
+	//fmt.Println("join1")
 	cfg.join(1)
 
 	time.Sleep(1 * time.Second)
-	fmt.Println("wait!")
+	//fmt.Println("wait!")
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch
 	}
-	fmt.Println("wait! done")
+	//fmt.Println("wait! done")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -497,7 +497,11 @@ func TestConcurrent3(t *testing.T) {
 	}
 
 	t0 := time.Now()
+	index := 0
 	for time.Since(t0) < 12*time.Second {
+		//fmt.Println("iter=", index)
+		index++
+
 		cfg.join(2)
 		cfg.join(1)
 		time.Sleep(time.Duration(rand.Int()%900) * time.Millisecond)
@@ -516,6 +520,7 @@ func TestConcurrent3(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	//fmt.Println("wait!")
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch

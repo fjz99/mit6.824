@@ -121,3 +121,9 @@ BUG FIX:
 15. 这个可以建模成路由器互联，有源和目的路由器，要保证接收方只能重复接收最新的数据，即不能被抢占
 16. 因为异步执行，所以waitUntil的意义也没那么大，不能保证一定能执行，可能出现delete的情况
 所以，要么就状态机中返回err，让客户端重试，要么就wait的条件是存在lastVersion=version的shard，而且还是我想要的shard，但是因为异步，也可能有问题，，，
+
+
+
+17. persister.RaftStateSize() 11101, but maxraftstate 1000;因为每次get等都会写入日志，但是因为不是提交，所以没法快照，然后就超了。。
+18. //存在一个case：主节点挂了，从节点变成主节点，从节点是OUT，进行重发，但是这个group的节点已经进入了下一个version。。此时就会永远无法进入下个version
+    //所以ErrOutdated也需要认为是确认收到，因为他肯定曾经收到了，才version++了

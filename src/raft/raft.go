@@ -19,7 +19,7 @@ const ChannelSize = 100
 const HeartbeatInterval = time.Duration(200) * time.Millisecond
 const RpcTimeout = time.Duration(100) * time.Millisecond //事实上可以不自己设置超时时间也能通过
 const MinElectionTimeoutInterval = 250
-const BatchSize = 50 //20个log一个batch
+const BatchSize = 20 //20个log一个batch
 
 //每个发送线程
 //peerIndex 即对应的在peer数组的偏移
@@ -245,7 +245,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	Debug(dSnap, "CondInstallSnapshot请求 lastIncludedTerm=%d,lastIncludedIndex=%d", rf.me, lastIncludedTerm, lastIncludedIndex)
 	Debug(dSnap, "CondInstallSnapshot请求 当前log为 %+v", rf.me, rf.log)
 	//直接判断commitId即可
-	if rf.commitIndex >= rf.snapshotIndex {
+	if lastIncludedTerm < rf.term || rf.commitIndex >= rf.snapshotIndex {
 		Debug(dSnap, "CondInstallSnapshot请求 返回true,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
 		return false
 	} else {
@@ -416,7 +416,7 @@ func (rf *Raft) processLeader() {
 			if states.to == CANDIDATE {
 				//CANDIDATE是超时转换的！
 				Debug(dError, "状态转换无效！ %d -> %d", rf.me, states.from, states.to)
-			} else {
+			} else if states.to == FOLLOWER {
 				//变成follower了,清空发送队列
 				rf.cleanupSenderChannel()
 				Debug(dLeader, "leader 被 S%d term=%d 降级了为follower！，清空发送队列", rf.me, rf.LeaderId, rf.term)

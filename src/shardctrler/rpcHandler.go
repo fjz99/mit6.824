@@ -70,21 +70,36 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	Debug(dServer, "S%d 接收到Query rpc", sc.me)
-	op := &Op{Type: QUERY, Num: args.Num}
-	cmd := sc.buildCmd(op, -1, -1)
-	index, _, isLeader := sc.rf.Start(cmd)
-
-	if !isLeader { //这样会导致raft多次打印”我不是leader“的日志
-		*reply = QueryReply{true, ErrWrongLeader, Config{}}
-	} else {
-		output := sc.waitFor(index)
-		Debug(dServer, "S%d Query output = %+v", sc.me, output)
-		if output.Err == ErrWrongLeader {
-			*reply = QueryReply{true, ErrWrongLeader, Config{}}
-		} else {
-			*reply = QueryReply{false, OK, output.Data.(Config)}
+	//简单处理，否则不快照的话，会因为query太多而err
+	if sc.rf.GetLeaderId() == sc.me {
+		if args.Num == -1 {
+			*reply = QueryReply{false, OK, sc.configs[len(sc.configs)-1]}
 		}
+		if len(sc.configs) <= args.Num && args.Num != -1 {
+			*reply = QueryReply{false, OK, Config{-1, [NShards]int{}, map[int][]string{}}}
+		}
+		if len(sc.configs) > args.Num && args.Num != -1 {
+			*reply = QueryReply{false, OK, sc.configs[args.Num]}
+		}
+	} else {
+		*reply = QueryReply{true, ErrWrongLeader, Config{}}
 	}
+
+	//op := &Op{Type: QUERY, Num: args.Num}
+	//cmd := sc.buildCmd(op, -1, -1)
+	//index, _, isLeader := sc.rf.Start(cmd)
+
+	//if !isLeader { //这样会导致raft多次打印”我不是leader“的日志
+	//	*reply = QueryReply{true, ErrWrongLeader, Config{}}
+	//} else {
+	//	output := sc.waitFor(index)
+	//	Debug(dServer, "S%d Query output = %+v", sc.me, output)
+	//	if output.Err == ErrWrongLeader {
+	//		*reply = QueryReply{true, ErrWrongLeader, Config{}}
+	//	} else {
+	//		*reply = QueryReply{false, OK, output.Data.(Config)}
+	//	}
+	//}
 	Debug(dServer, "S%d Query rpc,返回 %+v", sc.me, *reply)
 }
 

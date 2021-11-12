@@ -1,28 +1,18 @@
 package shardkv
 
-//todo 分片迁移的内容是空值
-//todo 状态机对shard的迁移的时候，如果这个shard已经存在？
-//todo 增加序列号，保证不重复
-//todo 速度很慢
-//todo 给shard附上最后修改的版本号，多次接收的话，选取最大的进行覆盖；因为并发变更，可能一次发送完了，然后执行，然后第二次又发送了
-//todo 添加多个发送线程，否则太慢了
-//todo 多次添加重复的change config命令。。
-//todo 记录所有历史版本
-//todo 历史版本不持久化
-//todo 发送时不会清空发送队列
-//todo 要保证版本一下一下变，接收方接收到之后，检查last版本，然后获得他的下一个版本，如果就是我那就行，否则就转发这样增加last号
-//todo condInstallSnapshot 有bug
-
 import (
+	"6.824/labgob"
 	"6.824/labrpc"
+	"6.824/raft"
 	"6.824/shardctrler"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-import "6.824/raft"
-import "6.824/labgob"
+
+//可以考虑的修改：
+//打包发送，一次发送所有的OUT shard
+//client也有version字段，put get等会携带
 
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *ShardKV) applier() {
@@ -44,18 +34,22 @@ func (kv *ShardKV) applier() {
 				Debug(dServer, "G%d-S%d 装载快照,快照index=%d，我的lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
 				kv.readSnapshotPersist(op.Snapshot)
 				kv.lastApplied = op.SnapshotIndex
+				index := kv.rf.SetCommitIndex(kv.lastApplied)
+				Debug(dServer, "G%d-S%d 装载快照,更新lastApplied=%d，raft commitIndex=%d",
+					kv.gid, kv.me, kv.lastApplied, index)
 			} else {
 				Debug(dServer, "G%d-S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.gid, kv.me, op.SnapshotIndex, kv.lastApplied)
 			}
 		} else {
 			cmd := op.Command.(Command)
 			Assert(op.CommandValid, "")
-			Debug(dMachine, "G%d-S%d 状态机开始执行命令%+v,index=%d", kv.gid, kv.me, cmd, op.CommandIndex)
+			Debug(dMachine, "G%d-S%d 状态机开始执行命令%+v,index=%d,status=%+v", kv.gid, kv.me, cmd, op.CommandIndex, kv.ShardStatus)
 			if op.CommandIndex <= kv.lastApplied {
+				kv.checkSnapshot()
 				kv.mu.Unlock()
 				continue
 			}
-			Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op))
+			//Assert(op.CommandIndex == kv.lastApplied+1, fmt.Sprintf("lastApplied=%d,op=%+v \n", kv.lastApplied, op))
 
 			switch cmd.Op.Type {
 			case PutType:
@@ -81,12 +75,13 @@ func (kv *ShardKV) applier() {
 			}
 			kv.lastApplied++
 			//判断当前的字节数是否太大了
-			size := kv.persister.RaftStateSize()
-			if kv.maxraftstate > 0 && size >= kv.maxraftstate {
-				Debug(dServer, "G%d-S%d 发现state size=%d，而max state size=%d,所以创建快照", kv.gid, kv.me, size, kv.maxraftstate)
+			Debug(dWarn, "G%d-S%d snap size=%d,state size=%d", kv.gid, kv.me, kv.persister.SnapshotSize(), kv.persister.RaftStateSize())
+			if kv.maxraftstate > 0 && (cmd.Op.Type == ReceiveShard || cmd.Op.Type == DeleteShard) {
 				kv.rf.Snapshot(kv.lastApplied, kv.constructSnapshot())
+			} else {
+				kv.checkSnapshot()
 			}
-			Debug(dMachine, "G%d-S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d", kv.gid, kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied)
+			Debug(dMachine, "G%d-S%d 状态机执行命令%+v结束，结果为%+v,更新lastApplied=%d,status=%+v", kv.gid, kv.me, cmd, kv.output[op.CommandIndex], kv.lastApplied, kv.ShardStatus)
 		}
 		kv.commitIndexCond.Broadcast() //装载快照的话，lastApplied也会变
 		kv.mu.Unlock()
@@ -94,24 +89,29 @@ func (kv *ShardKV) applier() {
 }
 
 func (kv *ShardKV) changeConfig(CommandIndex int, command Command) {
-	Debug(dMachine, "G%d-S%d 执行changeConfig命令,index=%d,config=%+v,AlwaysMe=%+v",
-		kv.gid, kv.me, CommandIndex, *command.Op.Config)
-	//似乎没必要检验getLatestConfig，毕竟肯定要changeConfig
-	if command.Op.Config.Num <= kv.Version {
-		Debug(dMachine, "G%d-S%d 执行changeConfig命令，changeConfig失败，操作数的config=%d比我的=%d小",
-			kv.gid, kv.me, command.Op.Config.Num, kv.Version)
-		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig失败，操作数的config比我的小"}
+	newConfig := command.Op.Config
+	Debug(dMachine, "G%d-S%d 执行changeConfig命令,index=%d,newConfig=%+v,status=%+v", kv.gid, kv.me, CommandIndex, *newConfig, kv.ShardStatus)
+
+	if newConfig.Num != kv.Version+1 {
+		Debug(dMachine, "G%d-S%d 执行changeConfig命令，changeConfig失败，操作数的config=%d ！= 我的=%d +1",
+			kv.gid, kv.me, newConfig.Num, kv.Version)
+		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig失败，操作数的config！= 我的+1"}
 		return
-	} else if kv.isLeader() {
-		kv.output[CommandIndex] = &StateMachineOutput{OK, "我是leader，状态机跳过执行changeConfig命令！"}
-		Debug(dMachine, "G%d-S%d 我是leader，状态机跳过执行changeConfig命令！", kv.gid, kv.me)
-	} else if !kv.checkDuplicate(CommandIndex, command) {
-		//只有在状态机执行状态转换的时候，才会发送shard，否则可能出现发送脏数据的问题 fixme
-		kv.changeConfigUtil(*command.Op.Config)
+	} else {
+		//都加一了，肯定不重复。。
+		kv.setNewStatus(kv.Config, *newConfig)
+		kv.setNewConfig(*newConfig)
+		if newConfig.Num == 1 {
+			//初始化
+			for i := 0; i < NShards; i++ {
+				if newConfig.Shards[i] == kv.gid {
+					kv.ShardMap[i] = Shard{Id: i, State: map[string]string{}, Session: map[int64]int{}}
+					kv.ShardStatus[i] = READY
+				}
+			}
+		}
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "changeConfig成功！"}
 	}
-	kv.MachineVersion = raft.Max(kv.MachineVersion, command.Op.Config.Num)
-	Debug(dMachine, "G%d-S%d 更新MachineVersion=%d", kv.gid, kv.me, kv.MachineVersion)
 }
 
 //注意：重启的时候会重新执行commit的，就导致会出现不负责之类的情况
@@ -119,50 +119,43 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 	shardId := command.Op.ShardId
 	shard := CopyShard(*command.Op.Shard)
 	_, exists := kv.ShardMap[shardId]
+	theirVersion := command.Op.TheirVersion
 
-	Debug(dMachine, "G%d-S%d 执行receiveShard命令,index=%d,shard=%+v", kv.gid, kv.me, CommandIndex, *command.Op.Shard)
-	kv.getLatestConfig() //fixme
+	Debug(dMachine, "G%d-S%d 执行receiveShard命令,index=%d,shard=%+v,status=%+v", kv.gid, kv.me, CommandIndex, *command.Op.Shard, kv.ShardStatus)
+
+	//校验版本号可以简化问题
+	if theirVersion < kv.Version {
+		kv.output[CommandIndex] = &StateMachineOutput{ErrOutdated, "ErrOutdated！"}
+		return
+	} else if theirVersion > kv.Version {
+		kv.output[CommandIndex] = &StateMachineOutput{ErrNotReady, "ErrNotReady！"}
+		return
+	}
+
 	//必须检验，很可能多次接收
 	if kv.checkDuplicate(CommandIndex, command) {
 		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复receive！", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "重复receive！"}
 		return
 	}
+
 	//校验我是否负责
-	now := kv.QueryOrCached(shard.LastModifyVersion)
-	if now.Shards[shardId] != kv.gid {
-		panic(fmt.Sprintf("G%d-S%d 执行receiveShard命令,version=%d,shard=%+v，now=%+v,gid=%+v", kv.gid, kv.me,
-			kv.Version, *command.Op.Shard, now, kv.gid))
+	if !kv.verifyShardResponsibility(shardId) {
+		panic(1)
+	}
+	//因为发送频率太高了，可能多次发送，导致当前状态其实是READY，所以不要覆盖
+	if kv.ShardStatus[shardId] == READY {
+		Assert(exists, "")
+		kv.output[CommandIndex] = &StateMachineOutput{OK, "shard已经ready了"}
+		return
 	}
 
+	Assert(kv.ShardStatus[shardId] == IN, "")
+
 	//无脑接收这个shard
-	if exists {
-		myShardVersion := kv.ShardMap[shardId].LastModifyVersion
-		theirShardVersion := command.Op.Shard.LastModifyVersion
-		if myShardVersion < theirShardVersion { //不能有等于号
-			//比我的新
-			kv.ShardMap[shardId] = shard
-			kv.output[CommandIndex] = &StateMachineOutput{OK, "我负责！+版本号比我大，更新！"}
-		} else {
-			kv.output[CommandIndex] = &StateMachineOutput{OK, "我负责！+版本号比我小于等于，abort！"} //必须是ok，引导发送发删除shard
-		}
-	} else {
-		kv.ShardMap[shardId] = shard
-		kv.output[CommandIndex] = &StateMachineOutput{OK, "我负责！+不存在，添加！"}
-	}
-	Assert(kv.Version >= shard.LastModifyVersion, "")
-	if shard.LastModifyVersion == kv.Version {
-		//下一个就是我，ok
-		myShard := kv.ShardMap[shardId]
-		kv.Ready[shardId] = true
-		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令接收到shard id=%d version=%d，我的version=%d，所以更新为ready！,ready=%+v,shard map=%+v",
-			kv.gid, kv.me, shardId, myShard.LastModifyVersion, kv.Version, kv.Ready, kv.ShardMap)
-	} else {
-		//也可以不发送，会有线程自动扫描的。。
-		kv.output[CommandIndex] = &StateMachineOutput{ErrRedirect,
-			"可能出现在rpc handler中是+1，但是到这里就不是了。。因为是异步的，此时返回ErrRedirect"}
-	}
-	//可能出现在rpc handler中是+1，但是到这里就不是了。。因为是异步的，此时返回ErrRedirect
+	kv.ShardMap[shardId] = shard
+	kv.ShardStatus[shardId] = READY
+	kv.output[CommandIndex] = &StateMachineOutput{OK, "shard接受成功"}
 
 	Debug(dMachine, "G%d-S%d 执行receiveShard命令,ok,shardId=%d", kv.gid, kv.me, shardId)
 }
@@ -170,7 +163,15 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 func (kv *ShardKV) deleteShard(CommandIndex int, command Command) {
 	shardId := command.Op.ShardId
 
-	Debug(dMachine, "G%d-S%d 执行deleteShard命令,index=%d,shardId=%d,shard=%+v", kv.gid, kv.me, CommandIndex, shardId, command.Op.Shard)
+	Debug(dMachine, "G%d-S%d 执行deleteShard命令,index=%d,shardId=%d,shard=%+v,status=%+v", kv.gid, kv.me, CommandIndex, shardId, command.Op.Shard, kv.ShardStatus)
+
+	if command.Op.TheirVersion < kv.Version {
+		kv.output[CommandIndex] = &StateMachineOutput{ErrOutdated, "ErrOutdated！"}
+		Debug(dMachine, "G%d-S%d WARN:执行deleteShard命令,shard=%+v,status=%+v,version变化%d->%d，放弃delete", kv.gid,
+			kv.me, command.Op.Shard, kv.ShardStatus, command.Op.TheirVersion, kv.Version)
+		return
+	}
+
 	//检验了也没啥用，因为是自己提交的，clientId=-1
 	if kv.checkDuplicate(CommandIndex, command) {
 		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复delete！", kv.gid, kv.me, shardId)
@@ -178,11 +179,10 @@ func (kv *ShardKV) deleteShard(CommandIndex int, command Command) {
 		return
 	}
 
-	if kv.Config.Shards[shardId] == kv.gid && command.Op.Shard.LastModifyVersion == kv.Version {
-		//我不负责就对了，因为是先改变config再删除的。。
-		//即现在我负责的，不能删除，但是曾经我负责的，可以删除
-		Debug(dMachine, "G%d-S%d 执行deleteShard命令，shardId=%d,这个shard我负责,而且last version=my version，不能删除，abort", kv.gid, kv.me, shardId)
+	if kv.Config.Shards[shardId] == kv.gid {
+		Debug(dMachine, "G%d-S%d 执行deleteShard命令，shardId=%d,这个shard我负责,不能删除，abort", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "我负责！，不能删除！"}
+		panic(1)
 		return
 	}
 
@@ -194,13 +194,14 @@ func (kv *ShardKV) deleteShard(CommandIndex int, command Command) {
 	}
 
 	delete(kv.ShardMap, shardId)
+	kv.ShardStatus[shardId] = NotMine
 
-	Debug(dMachine, "G%d-S%d 执行deleteShard命令,ok", kv.gid, kv.me)
+	Debug(dMachine, "G%d-S%d 执行deleteShard命令,ok,status=%+v", kv.gid, kv.me, kv.ShardStatus)
 	kv.output[CommandIndex] = &StateMachineOutput{OK, "delete!"}
 }
 
 func (kv *ShardKV) put(CommandIndex int, command Command) {
-	Debug(dMachine, "G%d-S%d 执行put命令,index=%d,cmd=%+v", kv.gid, kv.me, CommandIndex, command)
+	Debug(dMachine, "G%d-S%d 执行put命令,index=%d,cmd=%+v,status=%+v", kv.gid, kv.me, CommandIndex, command, kv.ShardStatus)
 	if !kv.verifyKeyResponsibility(command.Op.Key) {
 		Debug(dMachine, "G%d-S%d WARN：执行put命令，shard=%d,这个shard我不负责，负责的是%d", kv.gid,
 			kv.me, key2shard(command.Op.Key), kv.Config.Shards[key2shard(command.Op.Key)])
@@ -209,11 +210,10 @@ func (kv *ShardKV) put(CommandIndex int, command Command) {
 	}
 	shard := key2shard(command.Op.Key)
 
-	if !kv.isReady(shard) {
-		if kv.isLeader() {
-			Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
-			kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
-		}
+	//引导客户端重试
+	if kv.ShardStatus[shard] != READY {
+		Debug(dMachine, "G%d-S%d kv.ShardStatus[shard]=%+v != READY ", kv.gid, kv.me, kv.ShardStatus[shard])
+		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongGroup, "kv.ShardStatus[shard] != READY"}
 		return
 	}
 
@@ -227,7 +227,7 @@ func (kv *ShardKV) put(CommandIndex int, command Command) {
 }
 
 func (kv *ShardKV) get(CommandIndex int, command Command) {
-	Debug(dMachine, "G%d-S%d 执行get命令,index=%d,cmd=%+v", kv.gid, kv.me, CommandIndex, command)
+	Debug(dMachine, "G%d-S%d 执行get命令,index=%d,cmd=%+v,status=%+v", kv.gid, kv.me, CommandIndex, command, kv.ShardStatus)
 
 	if !kv.verifyKeyResponsibility(command.Op.Key) {
 		Debug(dMachine, "G%d-S%d WARN：执行get命令，shard=%d,这个shard我不负责，负责的是%d", kv.gid,
@@ -235,8 +235,16 @@ func (kv *ShardKV) get(CommandIndex int, command Command) {
 		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongGroup, ""}
 		return
 	}
+
 	shard := key2shard(command.Op.Key)
 	state := kv.ShardMap[shard].State
+
+	if kv.ShardStatus[shard] != READY {
+		Debug(dMachine, "G%d-S%d kv.ShardStatus[shard]=%+v != READY ", kv.gid, kv.me, kv.ShardStatus[shard])
+		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongGroup, "kv.ShardStatus[shard] != READY"}
+		return
+	}
+
 	if v, ok := state[command.Op.Key]; ok {
 		Debug(dMachine, "G%d-S%d 执行get命令,value=%s", kv.gid, kv.me, v)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, v}
@@ -247,7 +255,7 @@ func (kv *ShardKV) get(CommandIndex int, command Command) {
 }
 
 func (kv *ShardKV) append(CommandIndex int, command Command) {
-	Debug(dMachine, "G%d-S%d 执行append命令,index=%d,cmd=%+v", kv.gid, kv.me, CommandIndex, command)
+	Debug(dMachine, "G%d-S%d 执行append命令,index=%d,cmd=%+v,status=%+v", kv.gid, kv.me, CommandIndex, command, kv.ShardStatus)
 
 	if !kv.verifyKeyResponsibility(command.Op.Key) {
 		Debug(dMachine, "G%d-S%d WARN：执行append命令，shard=%d,这个shard我不负责，负责的是%d", kv.gid,
@@ -258,11 +266,9 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 
 	//判断这个key存不存在，因为waitUntilReady之后，异步可能改变map，delete了
 	shard := key2shard(command.Op.Key)
-	if !kv.isReady(shard) {
-		if kv.isLeader() {
-			Debug(dMachine, "G%d-S%d WARN：解决waitUntil bug的重试。。", kv.gid, kv.me)
-			kv.output[CommandIndex] = &StateMachineOutput{ErrWrongLeader, "解决waitUntil bug的重试。。"}
-		}
+	if kv.ShardStatus[shard] != READY {
+		Debug(dMachine, "G%d-S%d kv.ShardStatus[shard]=%+v != READY ", kv.gid, kv.me, kv.ShardStatus[shard])
+		kv.output[CommandIndex] = &StateMachineOutput{ErrWrongGroup, "kv.ShardStatus[shard] != READY"}
 		return
 	}
 
@@ -290,12 +296,8 @@ func (kv *ShardKV) append(CommandIndex int, command Command) {
 //
 func (kv *ShardKV) Kill() {
 	Debug(dServer, "G%d-S%d 被kill", kv.gid, kv.me)
-	//kv.sendShards2Channel() //?
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	//close(kv.migrationChan)
-	//close(kv.applyCh)
-	//Debug(dServer, "G%d-S%d 被kill结束", kv.gid, kv.me)
 }
 
 func (kv *ShardKV) killed() bool {
@@ -355,32 +357,19 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.mu = raft.NewReentrantLock()
 	kv.commitIndexCond = sync.NewCond(kv.mu)
 
-	kv.migrationChan = make(chan *Task, 100)
-
 	kv.lastApplied = 0
 	kv.output = make(map[int]*StateMachineOutput)
 	kv.ShardMap = map[int]Shard{}
-	kv.Version = -1
-	kv.Ready = map[int]bool{}
+	kv.Version = 0
 	kv.QueryCache = map[int]shardctrler.Config{}
-	kv.lastSentId = make([]int, NShards)
-	raft.SetArrayValue(kv.lastSentId, -1)
-	//启动时创建自己负责的
-	//fixme 如果是迁移失败，重启之后呢？
-
-	go kv.fetchConfigThread()
-	for i := 0; i < 5; i++ {
-		go kv.shardSenderThread()
+	kv.ShardStatus = make([]string, NShards)
+	for i := 0; i < NShards; i++ {
+		kv.ShardStatus[i] = NotMine
 	}
+
+	go kv.PullConfigThread()
+	go kv.SendShardThread()
 	go kv.applier()
-	go func() {
-		//Debug(dTrace, "G%d-S%d 启动sendShards2Channel 扫描线程", kv.gid, kv.me)
-		for !kv.killed() {
-			time.Sleep(time.Duration(200) * time.Millisecond)
-			kv.sendShards2Channel()
-		}
-		//Debug(dTrace, "G%d-S%d 关闭sendShards2Channel 扫描线程", kv.gid, kv.me)
-	}()
 
 	go func() {
 		for !kv.killed() {
