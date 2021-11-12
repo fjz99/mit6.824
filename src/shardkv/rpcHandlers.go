@@ -21,13 +21,6 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 
-	//if kv.Version != args.Version {
-	//	Assert(kv.Version < args.Version, "")
-	//	*reply = GetReply{ErrOutdated, ""}
-	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-	//	return
-	//}
-
 	op := &Op{GetType, args.Key, "", nil, -1, nil, -1}
 	cmd := kv.buildCmd(op, -1, -1)
 	index, _, isLeader := kv.rf.Start(cmd)
@@ -68,23 +61,11 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 		return
 	}
-	//if kv.Version != args.Version {
-	//	Assert(kv.Version < args.Version, "")
-	//	*reply = PutAppendReply{ErrOutdated}
-	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-	//	return
-	//}
 	if !kv.verifyKeyResponsibility(args.Key) {
 		*reply = PutAppendReply{ErrWrongGroup}
 		Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
 		return
 	}
-	//if kv.Version != args.Version {
-	//	Assert(kv.Version < args.Version, "")
-	//	*reply = PutAppendReply{ErrOutdated}
-	//	Debug(dServer, "G%d-S%d PutAppend rpc,args=%+v,返回 %+v", kv.gid, kv.me, *args, *reply)
-	//	return
-	//}
 	op := &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}
 	if args.Op == "Put" {
 		op = &Op{PutType, args.Key, args.Value, nil, -1, nil, -1}

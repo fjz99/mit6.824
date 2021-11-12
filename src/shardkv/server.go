@@ -1,17 +1,18 @@
 package shardkv
 
 import (
+	"6.824/labgob"
 	"6.824/labrpc"
+	"6.824/raft"
 	"6.824/shardctrler"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-import "6.824/raft"
-import "6.824/labgob"
 
-//todo 打包发送，一次发送所有的OUT shard
-//todo 尝试delete同步提交
+//可以考虑的修改：
+//打包发送，一次发送所有的OUT shard
+//client也有version字段，put get等会携带
 
 //检查leader都在rpc中，状态机只负责维护状态
 func (kv *ShardKV) applier() {
@@ -131,7 +132,7 @@ func (kv *ShardKV) receiveShard(CommandIndex int, command Command) {
 		return
 	}
 
-	//必须检验，很可能多次接收 fixme ??
+	//必须检验，很可能多次接收
 	if kv.checkDuplicate(CommandIndex, command) {
 		Debug(dMachine, "G%d-S%d WARN：执行receiveShard命令，shardId=%d,重复receive！", kv.gid, kv.me, shardId)
 		kv.output[CommandIndex] = &StateMachineOutput{OK, "重复receive！"}
@@ -297,9 +298,6 @@ func (kv *ShardKV) Kill() {
 	Debug(dServer, "G%d-S%d 被kill", kv.gid, kv.me)
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	//close(kv.migrationChan)
-	//close(kv.applyCh)
-	//Debug(dServer, "G%d-S%d 被kill结束", kv.gid, kv.me)
 }
 
 func (kv *ShardKV) killed() bool {
@@ -370,7 +368,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	}
 
 	go kv.PullConfigThread()
-	//go kv.GCThread()
 	go kv.SendShardThread()
 	go kv.applier()
 
@@ -380,18 +377,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 			kv.commitIndexCond.Broadcast()
 		}
 	}()
-
-	//go func() {
-	//	for !kv.killed() {
-	//		time.Sleep(time.Duration(50) * time.Millisecond)
-	//		fmt.Printf("G%d-S%d state size=%d,snap size=%d \n",
-	//			kv.gid, kv.me, kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
-	//		if kv.persister.RaftStateSize() >= 7000 {
-	//			panic(fmt.Sprintf("G%d-S%d state size=%d,snap size=%d \n",
-	//				kv.gid, kv.me, kv.persister.RaftStateSize(), kv.persister.SnapshotSize()))
-	//		}
-	//	}
-	//}()
 
 	return kv
 }

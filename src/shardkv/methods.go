@@ -208,17 +208,11 @@ func (kv *ShardKV) QueryOrCached(version int) shardctrler.Config {
 		kv.QueryCache[query.Num] = query
 		kv.mu.Unlock()
 
-		//if query.Num == -1 {
-		//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
-		//}
 		return query
 	}
 	kv.mu.Lock()
 	if v, ok := kv.QueryCache[version]; ok {
 		kv.mu.Unlock()
-		//if v.Num == -1 {
-		//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, v)
-		//}
 		return v
 	}
 	kv.mu.Unlock()
@@ -228,9 +222,6 @@ func (kv *ShardKV) QueryOrCached(version int) shardctrler.Config {
 	kv.mu.Lock()
 	kv.QueryCache[query.Num] = query
 	kv.mu.Unlock()
-	//if query.Num == -1 {
-	//	Debug(dWarn, "G%d-S%d QueryOrCached query=%+v,num=-1", kv.gid, kv.me, query)
-	//}
 	return query
 }
 
