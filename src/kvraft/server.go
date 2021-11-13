@@ -19,10 +19,19 @@ func (kv *KVServer) applier() {
 		if op.SnapshotValid {
 			Assert(!op.CommandValid, "")
 			//读取快照
-			if kv.rf.CondInstallSnapshot(op.SnapshotTerm, op.SnapshotIndex, op.Snapshot) {
-				Debug(dServer, "S%d 装载快照,快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
+			//if kv.rf.CondInstallSnapshot(op.SnapshotTerm, op.SnapshotIndex, op.Snapshot) {
+			//	Debug(dServer, "S%d 装载快照,快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
+			//	kv.readSnapshotPersist(op.Snapshot)
+			//	kv.lastApplied = op.SnapshotIndex
+			//} else {
+			//	Debug(dServer, "S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
+			//}
+			if kv.lastApplied < op.SnapshotIndex {
+				Debug(dServer, "S%d 装载快照,快照index=%d，我的lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
 				kv.readSnapshotPersist(op.Snapshot)
 				kv.lastApplied = op.SnapshotIndex
+				index := kv.rf.SetCommitIndex(kv.lastApplied)
+				Debug(dServer, "S%d 装载快照,更新lastApplied=%d，raft commitIndex=%d", kv.me, kv.lastApplied, index)
 			} else {
 				Debug(dServer, "S%d CondInstallSnapshot返回不用装载快照，快照index=%d，lastApplied=%d", kv.me, op.SnapshotIndex, kv.lastApplied)
 			}

@@ -245,7 +245,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	Debug(dSnap, "CondInstallSnapshot请求 lastIncludedTerm=%d,lastIncludedIndex=%d", rf.me, lastIncludedTerm, lastIncludedIndex)
 	Debug(dSnap, "CondInstallSnapshot请求 当前log为 %+v", rf.me, rf.log)
 	//直接判断commitId即可
-	if lastIncludedTerm < rf.term || rf.commitIndex >= rf.snapshotIndex {
+	if rf.commitIndex >= rf.snapshotIndex {
 		Debug(dSnap, "CondInstallSnapshot请求 返回true,commitId=%d,snapshotIndex=%d", rf.me, rf.commitIndex, rf.snapshotIndex)
 		return false
 	} else {
